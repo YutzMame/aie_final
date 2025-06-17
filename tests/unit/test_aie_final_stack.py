@@ -1,7 +1,7 @@
 import aws_cdk as core
 import aws_cdk.assertions as assertions
 
-from aie_final.aie_final_stack import AieFinalStack
+from qa_system.aie_final_stack import AieFinalStack
 
 # example tests. To run these tests, uncomment this file along with the example
 # resource in aie_final/aie_final_stack.py

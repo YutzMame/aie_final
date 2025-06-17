@@ -3,7 +3,7 @@ import os
 
 import aws_cdk as cdk
 
-from aie_final.aie_final_stack import AieFinalStack
+from qa_system.aie_final_stack import AieFinalStack
 
 
 app = cdk.App()
