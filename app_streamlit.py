@@ -15,7 +15,6 @@ API_URL = "https://vedtxkcx72.execute-api.us-east-1.amazonaws.com/prod/"
 # --- デザイン用カスタムCSS ---
 st.markdown("""
 <style>
-    /* (CSS部分は変更ありません) */
     [data-testid="stAppViewContainer"] { background: linear-gradient(180deg, #001f3f, #000020); }
     [data-testid="stSidebar"] { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); border-right: 1px solid rgba(255, 255, 255, 0.1); }
     .main-container { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 2rem; border-radius: 1rem; margin-bottom: 1rem; }
@@ -27,7 +26,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- サイドバー (ページ選択機能を追加) ---
+# --- サイドバー (ページ選択機能) ---
 with st.sidebar:
     st.title("QA-Master 💡")
     st.markdown("---")
@@ -36,17 +35,9 @@ with st.sidebar:
 
     if page == "QA生成":
         st.markdown("## ⚙️ 生成設定")
-        # key="num_q"と設定することで、スライダーの値は自動的にst.session_state.num_qに保存されます
         num_q = st.slider("生成する問題数", 1, 10, 5, key="num_q")
-        
         difficulty_map = {"易しい": "易", "普通": "中", "難しい": "難"}
-        # key="difficulty"と設定することで、選択されたラベルは自動的にst.session_state.difficultyに保存されます
         selected_difficulty_label = st.radio("難易度", list(difficulty_map.keys()), index=1, key="difficulty")
-        
-        # ★★★ ここが修正点です ★★★
-        # `st.session_state.num_q = num_q` という冗長な行を削除しました。
-        
-        # 別のsession_stateキー('difficulty_code')に保存するのは問題ありません
         st.session_state.difficulty_code = difficulty_map[selected_difficulty_label]
     
     st.markdown("---")
@@ -72,7 +63,6 @@ if page == "QA生成":
             with st.spinner("AIが問題を生成中です..."):
                 payload = {
                     "lecture_text": lecture_input,
-                    # st.session_state.num_q はスライダーによって自動で更新されています
                     "num_questions": st.session_state.num_q,
                     "difficulty": st.session_state.difficulty_code
                 }
@@ -80,21 +70,37 @@ if page == "QA生成":
                     response = requests.post(f"{API_URL}generate", json=payload, timeout=180)
                     response.raise_for_status() 
                     st.session_state.generated_qa = response.json().get('qa_set', [])
-                    st.success("QAが生成されました！「QA管理」ページに自動で保存されています。")
+                    st.success("QAが生成されました！")
                     st.balloons()
+                    
+                    # ★★★ 修正点2: QA管理ページのキャッシュを削除して、次回の表示で最新化する ★★★
+                    if 'qa_list' in st.session_state:
+                        del st.session_state.qa_list
+
                 except requests.exceptions.RequestException as e:
                     st.error(f"APIへの接続中にエラーが発生しました: {e}")
                 except json.JSONDecodeError:
                     st.error(f"APIからの応答が不正な形式です。APIのログを確認してください。 応答: {response.text}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 生成結果のプレビュー
+    # ★★★ 修正点3: インタラクティブなプレビュー機能を完全に復活 ★★★
     if 'generated_qa' in st.session_state and st.session_state.generated_qa:
         st.markdown("---")
-        st.subheader("生成結果プレビュー")
+        st.header("生成結果（ここで回答も試せます）")
         for qa in st.session_state.generated_qa:
-            with st.expander(f"問 {qa.get('question_id', '')}：{qa.get('question', '')}"):
-                 st.markdown(f"**正解:** {qa.get('correct_answer', 'N/A')} | **解説:** {qa.get('explanation', 'N/A')}")
+            q_id = qa.get('question_id', qa.get('question', '')[:10]) 
+
+            st.subheader(f"問{qa.get('question_id', '')} ({qa.get('difficulty', '')}) - {qa.get('type', qa.get('answer_type', 'N/A'))}")
+            st.write(qa.get('question', ''))
+
+            if qa.get('type', qa.get('answer_type')) == '一択選択式':
+                options = qa.get('options', [])
+                st.radio("選択肢", options, key=f"q_{q_id}", label_visibility="collapsed", index=None)
+            
+            with st.expander("答えと解説を見る"):
+                st.markdown(f"**正解:** {qa.get('answer', qa.get('correct_answer', 'N/A'))}")
+                st.markdown(f"**解説:** {qa.get('explanation', 'N/A')}")
+        st.markdown("---")
 
 
 # ============================
@@ -103,9 +109,11 @@ if page == "QA生成":
 elif page == "QA管理":
     st.header("2. 保存済みQAを管理する")
 
+    # ★★★ 修正点1: st.rerun() に変更 ★★★
     if st.button("一覧を再読み込み", use_container_width=True):
-        st.session_state.pop('qa_list', None)
-        st.experimental_rerun()
+        if 'qa_list' in st.session_state:
+            del st.session_state.qa_list
+        st.rerun()
 
     try:
         if 'qa_list' not in st.session_state:
@@ -138,8 +146,10 @@ elif page == "QA管理":
                         delete_response = requests.delete(delete_url)
                         if delete_response.status_code == 204:
                             st.success(f"ID: {qa_set_id} を削除しました。")
-                            st.session_state.pop('qa_list', None)
-                            st.experimental_rerun()
+                            if 'qa_list' in st.session_state:
+                                del st.session_state.qa_list
+                            # ★★★ 修正点1: st.rerun() に変更 ★★★
+                            st.rerun()
                         else:
                             st.error(f"削除に失敗しました。ステータスコード: {delete_response.status_code}")
                             

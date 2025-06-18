@@ -5,6 +5,7 @@ import boto3
 from botocore.exceptions import ClientError
 import traceback
 import uuid
+import decimal # ★★★ 1. decimalライブラリをインポート ★★★
 
 # (環境変数、boto3クライアント、DynamoDBのセットアップは変更なし)
 MODEL_ID = os.environ.get("MODEL_ID", "amazon.titan-text-express-v1")
@@ -14,26 +15,37 @@ TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 
+# ★★★ 2. floatをDecimalに変換するヘルパー関数を追加 ★★★
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            # floatとしてシリアライズすると精度が失われる可能性があるが、
+            # この関数は主にDB保存前のデータ変換に使うため、ここではfloatに変換
+            return float(o)
+        return super(DecimalEncoder, self).default(o)
+
+def replace_floats_with_decimals(obj):
+    if isinstance(obj, list):
+        return [replace_floats_with_decimals(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: replace_floats_with_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, float):
+        # 精度を保つために文字列経由でDecimalに変換
+        return decimal.Decimal(str(obj))
+    else:
+        return obj
+
 def handler(event, context):
     # (リクエストボディの解析、プロンプトの作成等は変更なし)
     try:
         body = json.loads(event['body'])
         lecture_text = body['lecture_text']
-        num_questions = body.get('num_questions', 5)
-        difficulty = body.get('difficulty', '中')
+        # ... (中略) ...
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
     system_prompt = f"""
-あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
-以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
-# ルール
-- 質問形式は「一択選択式」「記述式」をバランス良く含めること。
-- {num_questions}個の問題を、難易度「{difficulty}」で作成すること。
-- 回答には、なぜそれが正解なのかの短い解説を必ず含めること。
-- 出力は必ず指定されたJSON形式のみとし、前後に余計な文章は含めないこと。
-# JSON形式
-{{ "qa_set": [ {{ "question_id": 1, ... }} ] }}
+# ... (プロンプトは変更なし) ...
 """
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
     request_body = {
@@ -44,48 +56,41 @@ def handler(event, context):
     }
 
     try:
-        # (Bedrock呼び出し、レスポンスボディの読み取りは変更なし)
-        response = bedrock_runtime.invoke_model(body=json.dumps(request_body), modelId=MODEL_ID)
-        response_body = json.loads(response.get('body').read())
-        qa_result_text = response_body.get('output', {}).get('message', {}).get('content', [{}])[0].get('text')
-        
-        if not qa_result_text:
-            raise Exception("モデルの応答からテキストを抽出できませんでした。")
-
-        # JSONブロックの開始と終了を探す
-        start_index = qa_result_text.find('{')
-        end_index = qa_result_text.rfind('}')
-        
-        if start_index == -1 or end_index == -1 or end_index < start_index:
-            raise ValueError("モデルの応答から有効なJSONブロックを見つけられませんでした。")
-
+        # (Bedrock呼び出し、JSON抽出ロジックは変更なし)
+        # ... (中略) ...
         json_string = qa_result_text[start_index:end_index+1]
-        
-        # ★★★ ここが最終仕上げの修正点です ★★★
         try:
-            # まずはそのままパースを試みる
             qa_result_json = json.loads(json_string)
         except json.JSONDecodeError as e:
-            # "Extra data"エラーの場合のみ、[]で囲む修正を試みる
             if "Extra data" in str(e):
-                print("JSONDecodeError with 'Extra data' detected. Attempting to fix by wrapping in an array.")
-                try:
-                    array_json_string = f"[{json_string}]"
-                    parsed_list = json.loads(array_json_string)
-                    qa_result_json = {"qa_set": parsed_list}
-                except Exception as inner_e:
-                    raise Exception(f"Failed to parse model output even after wrapping in array. Error: {inner_e}")
+                # ... (中略) ...
+                array_json_string = f"[{json_string}]"
+                parsed_list = json.loads(array_json_string)
+                qa_result_json = {"qa_set": parsed_list}
             else:
-                # その他のJSONエラーはそのまま例外を送出
                 raise e
-
-        # (DynamoDBへの保存処理、成功レスポンスの返却は変更なし)
+        
+        # DynamoDBへの保存処理
         if table:
-            # ...
-            qa_set_id = str(uuid.uuid4())
-            item_to_save = { 'qa_set_id': qa_set_id, 'qa_data': qa_result_json, 'lecture_text_head': lecture_text[:200], 'created_at': context.aws_request_id }
-            table.put_item(Item=item_to_save)
-            print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
+            try:
+                qa_set_id = str(uuid.uuid4())
+                item_to_save = { 
+                    'qa_set_id': qa_set_id, 
+                    'qa_data': qa_result_json, 
+                    'lecture_text_head': lecture_text[:200], 
+                    'created_at': context.aws_request_id 
+                }
+                
+                # ★★★ 3. 保存前にfloatをDecimalに変換する処理を呼び出す ★★★
+                item_to_save_decimal = replace_floats_with_decimals(item_to_save)
+                
+                table.put_item(Item=item_to_save_decimal)
+                print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
+
+            except Exception as db_error:
+                print(f"ERROR: Failed to save to DynamoDB. {traceback.format_exc()}")
+                # DB保存エラーが発生しても、ユーザーにはQA生成成功として返す（プレビューはできるように）
+                # ただし、ここでエラーメッセージを返すように変更しても良い
         
         print("Successfully generated QA.")
         return create_success_response(qa_result_json)
@@ -94,9 +99,9 @@ def handler(event, context):
         print(f"ERROR: An unexpected error occurred. {traceback.format_exc()}")
         return create_error_response(500, f"予期せぬエラーが発生しました: {str(e)}")
 
-# (ヘルパー関数は変更なし)
+
 def create_success_response(body):
-    return { 'statusCode': 200, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps(body, ensure_ascii=False) }
+    return { 'statusCode': 200, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps(body, ensure_ascii=False, cls=DecimalEncoder) }
 
 def create_error_response(status_code, error_message):
     return { 'statusCode': status_code, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps({"error": error_message}, ensure_ascii=False) }

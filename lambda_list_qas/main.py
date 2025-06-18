@@ -4,12 +4,10 @@ import boto3
 from decimal import Decimal
 import traceback
 
-# 環境変数からテーブル名を取得
 TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 
-# JSONシリアライズできないDecimal型を変換するヘルパー
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Decimal):
@@ -19,11 +17,11 @@ class DecimalEncoder(json.JSONEncoder):
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
     try:
-        # DynamoDBから全件スキャン
-        response = table.scan()
-        items = response.get('Items', [])
+        # ★★★ 修正点2: ConsistentRead=True を追加 ★★★
+        response = table.scan(ConsistentRead=True)
         
-        print(f"Found {len(items)} items.")
+        items = response.get('Items', [])
+        print(f"Found {len(items)} items with strong consistency.")
         return create_success_response(items)
 
     except Exception as e:
@@ -34,7 +32,6 @@ def create_success_response(body):
     return {
         'statusCode': 200,
         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-        # Decimal型を扱えるようにclsを指定
         'body': json.dumps(body, ensure_ascii=False, cls=DecimalEncoder)
     }
 

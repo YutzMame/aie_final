@@ -1,0 +1,44 @@
+# ワークフローの名前
+name: Python Code Quality CI
+
+# ワークフローが実行されるトリガーを指定
+on:
+  push:
+    branches: [ main ] # mainブランチにプッシュされた時
+  pull_request:
+    branches: [ main ] # mainブランチへのプルリクエストが作成された時
+
+# 実行される一連のタスク（ジョブ）を定義
+jobs:
+  code-quality-check:
+    # ジョブを実行する仮想環境の種類
+    runs-on: ubuntu-latest
+
+    # ジョブの中のステップを定義
+    steps:
+      # 1. リポジトリのコードをチェックアウト（仮想環境にコピー）する
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Python環境をセットアップする
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # プロジェクトで使用しているPythonのバージョン
+
+      # 3. 必要なライブラリをインストールする
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install black ruff # CIで使うツールもインストール
+
+      # 4. Ruffでコードの静的解析（Lint）を実行する
+      - name: Lint with Ruff
+        run: |
+          ruff check .
+
+      # 5. Blackでコードのフォーマットをチェックする
+      - name: Format check with Black
+        run: |
+          black --check .
