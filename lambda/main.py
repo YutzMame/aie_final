@@ -1,19 +1,19 @@
-# lambda/main.py 
+# lambda/main.py (最終修正版)
 
 import json
 import os
 import boto3
 from botocore.exceptions import ClientError
 import traceback
+import re # ★★★ 修正点1: reモジュールをインポート ★★★
 
-# 環境変数からモデルIDを取得。なければデフォルト値を使用。
-MODEL_ID = os.environ.get("MODEL_ID", "amazon.nova-lite-v1:0")
-
-bedrock_runtime = boto3.client(service_name='bedrock-runtime')
+MODEL_ID = os.environ.get("MODEL_ID", "amazon.titan-text-lite-v1")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+bedrock_runtime = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
 
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
-    print(f"Using model: {MODEL_ID}")
+    print(f"Using model: {MODEL_ID} in region: {AWS_REGION}")
 
     try:
         body = json.loads(event['body'])
@@ -21,7 +21,6 @@ def handler(event, context):
         num_questions = body.get('num_questions', 5)
         difficulty = body.get('difficulty', '中')
     except Exception as e:
-        print(f"ERROR: Failed to parse request body. {str(e)}")
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
     prompt = f"""
@@ -54,33 +53,45 @@ def handler(event, context):
 {lecture_text}
 """
     
-    # Bedrockの新しいConverse API形式に合わせたリクエストボディ
+    # ★★★ 修正点2: request_body変数に代入する ★★★
     request_body = {
-        "anthropic_version": "bedrock-2023-05-31", # Claudeモデルなどを使う場合に推奨されるバージョン指定
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        "inputText": prompt,
+        "textGenerationConfig": {
+            "maxTokenCount": 4096,
+            "stopSequences": [],
+            "temperature": 0.7,
+            "topP": 0.9
+        }
     }
 
     try:
-        # Bedrock APIを呼び出し
+        print(f"Calling Bedrock with payload: {json.dumps(request_body)}")
         response = bedrock_runtime.invoke_model(
             body=json.dumps(request_body), 
             modelId=MODEL_ID
         )
-        
+
         response_body = json.loads(response.get('body').read())
-        # Claude 3などのMessages API形式のモデルからの応答を抽出
-        qa_result_text = response_body.get('content')[0].get('text')
-        
-        # モデルが生成したJSON文字列をPythonオブジェクトに変換
-        qa_result_json = json.loads(qa_result_text)
-        
+        qa_result_text = response_body.get('results')[0].get('outputText')
+
+        json_match = re.search(r'\{.*\}', qa_result_text, re.DOTALL)
+        if json_match:
+            qa_result_json = json.loads(json_match.group(0))
+        else:
+            raise Exception("モデルの応答から有効なJSONを抽出できませんでした。")
+
         print("Successfully generated QA.")
         return create_success_response(qa_result_json)
 
     except ClientError as e:
-        print(f"ERROR: Bedrock ClientError. {str(e)}")
-        return create_error_response(500, f"Bedrockの呼び出し中に権限エラーが発生しました: {e.response['Error']['Message']}")
+        error_code = e.response['Error']['Code']
+        error_message_detail = e.response['Error']['Message']
+        print(f"ERROR: Bedrock ClientError ({error_code}): {error_message_detail}")
+        if error_code == 'AccessDeniedException':
+            error_message = f"Bedrockモデル {MODEL_ID} へのアクセスが拒否されました。Bedrockコンソールでモデルアクセスが有効か確認してください。"
+        else:
+            error_message = f"Bedrockの呼び出し中にエラーが発生しました: {error_message_detail}"
+        return create_error_response(500, error_message)
     except Exception as e:
         print(f"ERROR: An unexpected error occurred. {traceback.format_exc()}")
         return create_error_response(500, f"予期せぬエラーが発生しました: {str(e)}")
@@ -89,19 +100,13 @@ def handler(event, context):
 def create_success_response(body):
     return {
         'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps(body)
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps(body, ensure_ascii=False)
     }
 
 def create_error_response(status_code, error_message):
     return {
         'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps({"error": error_message})
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps({"error": error_message}, ensure_ascii=False)
     }
