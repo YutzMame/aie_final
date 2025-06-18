@@ -34,7 +34,7 @@ class QaSystemStack(Stack):
             description="Generates QA",
             timeout=Duration.minutes(3),
             environment={
-                "MODEL_ID": "amazon.titan-text-express-v1",
+                "MODEL_ID": "amazon.nova-lite-v1:0",
                 "TABLE_NAME": qa_table.table_name,
             },
         )
