@@ -54,10 +54,40 @@ def handler(event, context):
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
-    system_prompt = """
+    system_prompt = f"""
 あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
-# (中略... プロンプト内容は変更なし)
-""".format(num_questions=num_questions, difficulty=difficulty)
+以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
+
+# ルール
+- 質問形式は「一択選択式」「記述式」をバランス良く含めること。
+- {num_questions}個の問題を、難易度「{difficulty}」で作成すること。
+- 回答には、なぜそれが正解なのかの短い解説を必ず含めること。
+- 出力は必ず指定されたJSON形式のみとし、前後に余計な文章は含めないこと。
+
+# JSON形式の例
+{{
+  "qa_set": [
+    {{
+      "question_id": 1,
+      "difficulty": "易",
+      "type": "一択選択式",
+      "question": "質問文1",
+      "options": ["選択肢A", "選択肢B", "選択肢C", "選択肢D"],
+      "correct_answer": "正解の選択肢",
+      "explanation": "解説文"
+    }},
+    {{
+      "question_id": 2,
+      "difficulty": "中",
+      "type": "記述式",
+      "question": "質問文2",
+      "options": [],
+      "correct_answer": "記述式の正解文",
+      "explanation": "解説文"
+    }}
+  ]
+}}
+"""
 
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
     request_body = {
