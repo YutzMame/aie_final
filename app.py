@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import os
-
 import aws_cdk as cdk
 
 from qa_system.qa_system_stack import QaSystemStack

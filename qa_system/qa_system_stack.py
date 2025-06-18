@@ -9,7 +9,6 @@ from aws_cdk import (
     RemovalPolicy
 )
 from constructs import Construct
-from datetime import datetime
 
 class QaSystemStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -25,6 +24,7 @@ class QaSystemStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_11,
             code=_lambda.Code.from_asset("lambda"),
             handler="main.handler",
+            description="Generates QA", 
             timeout=Duration.minutes(3),
             environment={ "MODEL_ID": "amazon.titan-text-express-v1", "TABLE_NAME": qa_table.table_name }
         )

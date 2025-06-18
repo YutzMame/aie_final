@@ -8,7 +8,7 @@ from qa_system.aie_final_stack import AieFinalStack
 def test_sqs_queue_created():
     app = core.App()
     stack = AieFinalStack(app, "aie-final")
-    template = assertions.Template.from_stack(stack)
+    #template = assertions.Template.from_stack(stack)
 
 #     template.has_resource_properties("AWS::SQS::Queue", {
 #         "VisibilityTimeout": 300
