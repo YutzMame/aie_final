@@ -14,6 +14,9 @@ class QaSystemStack(Stack):
             code=_lambda.Code.from_asset("lambda"),
             handler="main.handler",
             timeout=Duration.seconds(30)
+            environment={
+                "MODEL_ID": "amazon.nova-lite-v1:0" 
+            }
         )
 
         qa_lambda.add_to_role_policy(
