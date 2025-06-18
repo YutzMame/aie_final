@@ -62,6 +62,8 @@ def handler(event, context):
         lecture_text = body["lecture_text"]
         num_questions = body.get("num_questions", 5)
         difficulty = body.get("difficulty", "中")
+        theme = body.get("theme", "未分類")  # テーマがなければ「未分類」に
+        lecture_number = body.get("lecture_number")  # lecture_numberはオプション
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
@@ -155,12 +157,18 @@ def handler(event, context):
                     "qa_data": qa_result_json,
                     "lecture_text_head": lecture_text[:200],
                     "created_at": context.aws_request_id,
+                    "theme": theme,
                 }
+                # lecture_numberが指定されている場合のみ項目を追加
+                if lecture_number is not None:
+                    item_to_save["lecture_number"] = lecture_number
+
                 item_to_save_decimal = replace_floats_with_decimals(item_to_save)
                 table.put_item(Item=item_to_save_decimal)
                 print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
-            except Exception:
+            except Exception as e:
                 print(f"ERROR: Failed to save to DynamoDB. {traceback.format_exc()}")
+                return create_error_response(500, f"DBへの保存中にエラー: {str(e)}")
 
         return create_success_response(qa_result_json)
 

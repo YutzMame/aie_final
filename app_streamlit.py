@@ -53,6 +53,18 @@ with st.sidebar:
 if page == "QA生成":
     st.header("1. QAを生成する")
     st.markdown('<div class="main-container">', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        theme_input = st.text_input("テーマ名", placeholder="例：循環器内科")
+    with col2:
+        # st.number_inputで数値のみ入力できるようにする
+        lecture_number_input = st.number_input(
+            "講義回数（任意）",
+            min_value=1,
+            step=1,
+            placeholder="例: 3 (「第3回」の場合)",
+        )
+
     lecture_input = st.text_area(
         "**講義内容のテキストをここに貼り付け**",
         height=250,
@@ -62,12 +74,16 @@ if page == "QA生成":
     if st.button("この内容でQAを生成する", type="primary", use_container_width=True):
         if not lecture_input:
             st.warning("講義内容を入力してください。")
+        elif not theme_input:
+            st.warning("テーマ名を入力してください")
         else:
             with st.spinner("AIが問題を生成中です..."):
                 payload = {
                     "lecture_text": lecture_input,
                     "num_questions": st.session_state.num_q,
                     "difficulty": st.session_state.difficulty_code,
+                    "theme": theme_input,
+                    "lecture_number": lecture_number_input,
                 }
                 try:
                     response = requests.post(
@@ -78,7 +94,7 @@ if page == "QA生成":
                     st.success("QAが生成されました！")
                     st.balloons()
 
-                    # ★★★ 修正点2: QA管理ページのキャッシュを削除して、次回の表示で最新化する ★★★
+                    # QA管理ページのキャッシュを削除して、次回の表示で最新化する
                     if "qa_list" in st.session_state:
                         del st.session_state.qa_list
 
@@ -90,7 +106,6 @@ if page == "QA生成":
                     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ★★★ 修正点3: インタラクティブなプレビュー機能を完全に復活 ★★★
     if "generated_qa" in st.session_state and st.session_state.generated_qa:
         st.markdown("---")
         st.header("生成結果（ここで回答も試せます）")
@@ -125,36 +140,66 @@ if page == "QA生成":
 # ============================
 elif page == "QA管理":
     st.header("2. 保存済みQAを管理する")
+    st.markdown("##### 絞り込み検索")
 
-    # ★★★ 修正点1: st.rerun() に変更 ★★★
-    if st.button("一覧を再読み込み", use_container_width=True):
-        if "qa_list" in st.session_state:
-            del st.session_state.qa_list
-        st.rerun()
+    # 検索用の入力ウィジェットを横に並べる
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        filter_theme = st.text_input("テーマ名で検索", placeholder="例：循環器内科")
+    with col2:
+        filter_lecture_num = st.number_input(
+            "講義回数で検索",
+            min_value=1,
+            step=1,
+            format="%d",
+            placeholder="未入力の場合は全回数を表示",
+        )
+
+    # 検索ボタンとクリアボタン
+    col_search, col_clear, _ = st.columns([1, 1, 4])
+    with col_search:
+        # 検索ボタンは API 呼び出しのトリガーにはせず、UI上の目印として配置
+        st.button("検索", use_container_width=True, type="primary")
+    with col_clear:
+        if st.button("クリア", use_container_width=True):
+            # 検索条件をクリアしてページを再実行
+            st.session_state.filter_theme_input = ""
+            st.session_state.filter_lecture_num_input = 1  # number_inputの初期化
+            st.rerun()
+    st.markdown("---")
+
+    # if st.button("一覧を再読み込み", use_container_width=True):
+    #     if "qa_list" in st.session_state:
+    #         del st.session_state.qa_list
+    #     st.rerun()
 
     try:
-        if "qa_list" not in st.session_state:
-            with st.spinner("保存されたQAを読み込んでいます..."):
-                response = requests.get(f"{API_URL}qas", timeout=60)
-                response.raise_for_status()
-                st.session_state.qa_list = response.json()
+        # 1. 検索パラメータを準備する
+        params = {}
+        if filter_theme:  # テーマ入力欄に何か入力されていれば
+            params["theme"] = filter_theme
+        if filter_lecture_num:  # 講義回数入力欄に何か入力されていれば
+            params["lecture_number"] = filter_lecture_num
 
-        qas = st.session_state.get("qa_list", [])
+        # 2. 準備したパラメータを使ってAPIを呼び出す
+        with st.spinner("QAを読み込んでいます..."):
+            response = requests.get(f"{API_URL}qas", params=params, timeout=60)
+            response.raise_for_status()
+            qas = response.json()
 
+        # 3. 取得した結果を表示する (この部分は変更なし)
         if not qas:
-            st.info(
-                "保存されているQAはありません。「QA生成」ページで新しいQAを作成してください。"
-            )
+            st.info("該当するQAセットはありません。")
         else:
             st.info(f"{len(qas)}件のQAセットが見つかりました。")
             st.markdown("---")
 
             for item in qas:
                 qa_set_id = item["qa_set_id"]
-                with st.expander(
-                    f"QAセットID: `{qa_set_id}` (テキスト冒頭: {item.get('lecture_text_head', 'N/A')}...)"
-                ):
+                # テーマと回数を表示に追加
+                display_title = f"テーマ: {item.get('theme', 'N/A')} | 第{item.get('lecture_number', '?')}回 | ID: `{qa_set_id}`"
 
+                with st.expander(display_title):
                     qa_data = item.get("qa_data", {}).get("qa_set", [])
                     if qa_data:
                         df = pd.DataFrame(qa_data)
@@ -167,9 +212,6 @@ elif page == "QA管理":
                         delete_response = requests.delete(delete_url)
                         if delete_response.status_code == 204:
                             st.success(f"ID: {qa_set_id} を削除しました。")
-                            if "qa_list" in st.session_state:
-                                del st.session_state.qa_list
-                            # ★★★ 修正点1: st.rerun() に変更 ★★★
                             st.rerun()
                         else:
                             st.error(

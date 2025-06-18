@@ -25,6 +25,18 @@ class QaSystemStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
         )
 
+        # テーマと講義回数で検索するためのインデックス(GSI)を追加
+        qa_table.add_global_secondary_index(
+            index_name="ThemeLectureIndex",
+            partition_key=dynamodb.Attribute(
+                name="theme", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="lecture_number", type=dynamodb.AttributeType.NUMBER
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
         qa_lambda = _lambda.Function(
             self,
             "QaGeneratorFunction",
