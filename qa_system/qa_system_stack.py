@@ -68,7 +68,7 @@ class QaSystemStack(Stack):
             environment={"TABLE_NAME": qa_table.table_name},
         )
         qa_table.grant_read_data(list_qas_lambda)
-        qa_table.grant_read_data_on_index(list_qas_lambda, "ThemeLectureIndex")
+        qa_table.grant(list_qas_lambda, "dynamodb:Query")
 
         delete_qa_lambda = _lambda.Function(
             self,
