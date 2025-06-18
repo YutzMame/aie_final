@@ -3,6 +3,7 @@ import os
 import boto3
 from decimal import Decimal
 import traceback
+from boto3.dynamodb.conditions import Key
 
 TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource("dynamodb")
