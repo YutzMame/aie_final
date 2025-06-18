@@ -48,7 +48,7 @@ def handler(event, context):
 """
 
     # Novaモデル(Titan Text Lite)を使用
-    model_id = 'amazon.titan-text-lite-v1'
+    model_id = 'amazon.titan-text-express-v1'
     body = json.dumps({
         "inputText": prompt,
         "textGenerationConfig": { "maxTokenCount": 4096, "stopSequences": [], "temperature": 0.7, "topP": 0.9 }
