@@ -15,8 +15,7 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 
 def handler(event, context):
-    print(f"Received event: {json.dumps(event)}")
-    # (リクエストボディの解析、プロンプトの作成、Bedrockリクエストボディの作成は変更なし)
+    # (リクエストボディの解析、プロンプトの作成等は変更なし)
     try:
         body = json.loads(event['body'])
         lecture_text = body['lecture_text']
@@ -34,7 +33,7 @@ def handler(event, context):
 - 回答には、なぜそれが正解なのかの短い解説を必ず含めること。
 - 出力は必ず指定されたJSON形式のみとし、前後に余計な文章は含めないこと。
 # JSON形式
-... (中略) ...
+{{ "qa_set": [ {{ "question_id": 1, ... }} ] }}
 """
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
     request_body = {
@@ -46,7 +45,6 @@ def handler(event, context):
 
     try:
         # (Bedrock呼び出し、レスポンスボディの読み取りは変更なし)
-        print(f"Calling Bedrock with payload: {json.dumps(request_body)}")
         response = bedrock_runtime.invoke_model(body=json.dumps(request_body), modelId=MODEL_ID)
         response_body = json.loads(response.get('body').read())
         qa_result_text = response_body.get('output', {}).get('message', {}).get('content', [{}])[0].get('text')
@@ -54,61 +52,47 @@ def handler(event, context):
         if not qa_result_text:
             raise Exception("モデルの応答からテキストを抽出できませんでした。")
 
-        # ★★★ ここが修正点です: より堅牢なJSON抽出ロジックに変更 ★★★
-        json_string = ""
+        # JSONブロックの開始と終了を探す
+        start_index = qa_result_text.find('{')
+        end_index = qa_result_text.rfind('}')
+        
+        if start_index == -1 or end_index == -1 or end_index < start_index:
+            raise ValueError("モデルの応答から有効なJSONブロックを見つけられませんでした。")
+
+        json_string = qa_result_text[start_index:end_index+1]
+        
+        # ★★★ ここが最終修正点です ★★★
         try:
-            # モデル応答からJSONブロックの開始と終了を探す
-            start_index = qa_result_text.find('{')
-            end_index = qa_result_text.rfind('}')
-            
-            if start_index != -1 and end_index != -1 and end_index > start_index:
-                json_string = qa_result_text[start_index:end_index+1]
-                qa_result_json = json.loads(json_string)
-            else:
-                # JSONが見つからなかった場合
-                raise ValueError("モデルの応答から有効なJSONブロックを見つけられませんでした。")
+            # モデルが複数のJSONオブジェクトを返すクセを吸収するため、全体を[]で囲んで配列にする
+            array_json_string = f"[{json_string}]"
+            parsed_list = json.loads(array_json_string)
+
+            # アプリケーションが期待する{"qa_set": [...]}の形式に整える
+            qa_result_json = {"qa_set": parsed_list}
 
         except json.JSONDecodeError as json_error:
-            print(f"ERROR: Failed to decode JSON. Error: {json_error}")
-            print(f"Extracted string that failed to parse:\n---\n{json_string}\n---")
-            raise Exception(f"モデルの応答をJSONとして解析できませんでした: {json_error}")
-        
+            print(f"ERROR: Failed to decode JSON array. Error: {json_error}")
+            print(f"String that failed to parse as array:\n---\n{array_json_string}\n---")
+            raise Exception(f"モデルの応答をJSON配列として解析できませんでした: {json_error}")
+
         # (DynamoDBへの保存処理、成功レスポンスの返却は変更なし)
         if table:
-            try:
-                # ... (DB保存ロジック) ...
-                qa_set_id = str(uuid.uuid4())
-                item_to_save = { 'qa_set_id': qa_set_id, 'qa_data': qa_result_json, 'lecture_text_head': lecture_text[:200], 'created_at': context.aws_request_id }
-                table.put_item(Item=item_to_save)
-                print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
-            except Exception as db_error:
-                print(f"ERROR: Failed to save to DynamoDB. {traceback.format_exc()}")
-
+            # ...
+            qa_set_id = str(uuid.uuid4())
+            item_to_save = { 'qa_set_id': qa_set_id, 'qa_data': qa_result_json, 'lecture_text_head': lecture_text[:200], 'created_at': context.aws_request_id }
+            table.put_item(Item=item_to_save)
+            print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
+        
         print("Successfully generated QA.")
         return create_success_response(qa_result_json)
 
-    except ClientError as e:
-        # (エラーハンドリングは変更なし)
-        # ...
-        error_code = e.response['Error']['Code']
-        error_message_detail = e.response['Error']['Message']
-        print(f"ERROR: Bedrock ClientError ({error_code}): {error_message_detail}")
-        if error_code == 'AccessDeniedException':
-            error_message = f"Bedrockモデル {MODEL_ID} へのアクセスが拒否されました。"
-        else:
-            error_message = f"Bedrockの呼び出し中にエラーが発生しました: {error_message_detail}"
-        return create_error_response(500, error_message)
     except Exception as e:
         print(f"ERROR: An unexpected error occurred. {traceback.format_exc()}")
         return create_error_response(500, f"予期せぬエラーが発生しました: {str(e)}")
 
-
+# (ヘルパー関数は変更なし)
 def create_success_response(body):
-    # (ヘルパー関数は変更なし)
-    # ...
     return { 'statusCode': 200, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps(body, ensure_ascii=False) }
 
 def create_error_response(status_code, error_message):
-    # (ヘルパー関数は変更なし)
-    # ...
     return { 'statusCode': status_code, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps({"error": error_message}, ensure_ascii=False) }
