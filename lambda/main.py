@@ -47,8 +47,8 @@ def handler(event, context):
 {lecture_text}
 """
 
-    # Novaモデル(Titan Text Lite)を使用
-    model_id = 'amazon.titan-text-express-v1'
+    # Nova Liteを使用
+    model_id = 'amazon.nova-lite-v1:0'
     body = json.dumps({
         "inputText": prompt,
         "textGenerationConfig": { "maxTokenCount": 4096, "stopSequences": [], "temperature": 0.7, "topP": 0.9 }
