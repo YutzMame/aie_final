@@ -27,23 +27,42 @@ st.markdown(
 )
 
 
-# --- サイドバー (ページ選択機能) ---
+# --- session_stateの初期化 ---
+if 'page' not in st.session_state:
+    st.session_state.page = "QA生成"
+if 'selected_qa_set' not in st.session_state:
+    st.session_state.selected_qa_set = None
+if 'quiz_results' not in st.session_state:
+    st.session_state.quiz_results = None
+
+# --- サイドバー ---
 with st.sidebar:
     st.title("QA-Master 💡")
     st.markdown("---")
-    page = st.radio("メニュー", ["QA生成", "QA管理"], label_visibility="hidden")
-    st.markdown("---")
+    
+    # クイズが選択されている時だけ「クイズ受験」をメニューに追加
+    page_options = ["QA生成", "QA管理"]
+    if st.session_state.selected_qa_set is not None:
+        page_options.append("クイズ受験")
+    
+    # st.session_state.pageを直接更新
+    st.session_state.page = st.radio(
+        "メニュー", 
+        page_options, 
+        index=page_options.index(st.session_state.page), # 現在のページを選択状態に保つ
+        label_visibility="hidden"
+    )
 
-    if page == "QA生成":
+    st.markdown("---")
+    
+    # QA生成ページ用の設定
+    if st.session_state.page == "QA生成":
         st.markdown("## ⚙️ 生成設定")
-        num_q = st.slider("生成する問題数", 1, 10, 5, key="num_q")
+        st.session_state.num_q = st.slider("生成する問題数", 1, 10, 5)
         difficulty_map = {"易しい": "易", "普通": "中", "難しい": "難"}
-        selected_difficulty_label = st.radio(
-            "難易度", list(difficulty_map.keys()), index=1, key="difficulty"
-        )
+        selected_difficulty_label = st.radio("難易度", list(difficulty_map.keys()), index=1)
         st.session_state.difficulty_code = difficulty_map[selected_difficulty_label]
-
-    st.markdown("---")
+    
     st.info("AIが講義内容から問題と回答を自動で作成します。")
 
 
@@ -207,16 +226,112 @@ elif page == "QA管理":
                     else:
                         st.write("このセットにはQAデータがありません。")
 
-                    if st.button("このQAセットを削除", key=qa_set_id, type="secondary"):
-                        delete_url = f"{API_URL}qas/{qa_set_id}"
-                        delete_response = requests.delete(delete_url)
-                        if delete_response.status_code == 204:
-                            st.success(f"ID: {qa_set_id} を削除しました。")
+                    # --- ▼▼▼ ここが変更点です ▼▼▼ ---
+                    # ボタンを横に並べるために、列(columns)を作成します
+                    col1, col2 = st.columns([4, 1]) # 4:1の比率で列を分割
+
+                    # 1列目に「回答する」ボタンを配置
+                    with col1:
+                        if st.button("このクイズに回答する", key=f"start_{qa_set_id}", type="primary", use_container_width=True):
+                            st.session_state.selected_qa_set = item
+                            st.session_state.quiz_results = None # 前回の結果をリセット
+                            st.session_state.page = "クイズ受験"
                             st.rerun()
-                        else:
-                            st.error(
-                                f"削除に失敗しました。ステータスコード: {delete_response.status_code}"
-                            )
+
+                    # 2列目に「削除」ボタンを配置
+                    with col2:
+                        if st.button("削除", key=f"delete_{qa_set_id}", type="secondary", use_container_width=True):
+                            delete_url = f"{API_URL}qas/{qa_set_id}"
+                            delete_response = requests.delete(delete_url)
+                            if delete_response.status_code == 204:
+                                st.success(f"ID: {qa_set_id} を削除しました。")
+                                # ページをリフレッシュしてリストを更新
+                                st.rerun()
+                            else:
+                                st.error(f"削除に失敗しました。ステータスコード: {delete_response.status_code}")
 
     except Exception as e:
         st.error(f"QA一覧の取得中にエラーが発生しました: {e}")
+# ============================
+# 3. クイズ受験ページ
+# ============================
+elif st.session_state.page == "クイズ受験":
+    # クイズが選択されていなければ、管理ページに戻るよう促す
+    if st.session_state.selected_qa_set is None:
+        st.warning("「QA管理」ページから回答したいクイズを選択してください。")
+        st.stop()
+    
+    selected_set = st.session_state.selected_qa_set
+    st.header(f"📝 クイズ受験：{selected_set.get('theme', '')} - 第{selected_set.get('lecture_number', '?')}回")
+    st.markdown('<div class="main-container">', unsafe_allow_html=True)
+
+    qa_set = selected_set.get("qa_data", {}).get("qa_set", [])
+
+    # 回答フォーム
+    with st.form("quiz_form"):
+        user_answers_payload = []
+        # st.session_stateにユーザーの回答を保存するための準備
+        if 'user_answers_display' not in st.session_state:
+            st.session_state.user_answers_display = {}
+
+        for i, qa in enumerate(qa_set):
+            q_id = qa.get("question_id", i)
+            st.subheader(f"問{q_id}: {qa.get('question', '')}")
+            
+            answer = ""
+            if qa.get("type") == "一択選択式":
+                answer = st.radio("選択肢", qa.get("options", []), key=f"ans_{q_id}", label_visibility="collapsed", index=None)
+            else:
+                answer = st.text_area("あなたの回答", key=f"ans_{q_id}")
+
+            is_flagged = st.checkbox("この問題を保留する 🏳️", key=f"flag_{q_id}")
+            user_answers_payload.append({"question_id": q_id, "answer": answer, "is_flagged": is_flagged})
+            st.session_state.user_answers_display[q_id] = answer # 表示用に回答を保存
+            st.markdown("---")
+        
+        submitted = st.form_submit_button("回答を提出して採点する", use_container_width=True, type="primary")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # フォームが提出されたら採点APIを呼び出す
+    if submitted:
+        with st.spinner("採点中です..."):
+            qa_set_id = selected_set['qa_set_id']
+            api_url = f"{API_URL}qas/{qa_set_id}/submit"
+            try:
+                response = requests.post(api_url, json={"answers": user_answers_payload}, timeout=60)
+                response.raise_for_status()
+                st.success("採点が完了しました！")
+                st.session_state.quiz_results = response.json()
+            except Exception as e:
+                st.error(f"採点中にエラーが発生しました: {e}")
+
+    # 採点結果があれば表示する
+    if st.session_state.quiz_results:
+        st.markdown("---")
+        st.header("✨ 採点結果")
+        results = st.session_state.quiz_results
+        score = results.get('score', 0)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(label="正答率", value=f"{score:.1f} %")
+        with col2:
+            st.metric(label="正解数", value=f"{results.get('correct_count', 0)} / {results.get('total_count', 0)}")
+        
+        st.progress(int(score))
+        st.markdown("---")
+
+        st.markdown("### 各問題の結果")
+        for i, qa in enumerate(qa_set):
+            q_id = qa.get("question_id", i)
+            result_detail = results['results'][i]
+            status_icon = "✅" if result_detail['is_correct'] else "❌"
+            if result_detail['is_flagged']: status_icon = "🏳️"
+
+            with st.expander(f"{status_icon} 問{q_id}: {qa.get('question')}"):
+                st.markdown(f"**あなたの回答:** {st.session_state.user_answers_display.get(q_id, '（未回答）')}")
+                st.markdown(f"**模範解答:** {qa.get('correct_answer')}")
+                if qa.get('type') == '記述式':
+                    st.markdown(f"**必須キーワード:** `{'`, `'.join(qa.get('scoring_keywords', []))}`")
+                st.markdown(f"**解説:** {qa.get('explanation')}")

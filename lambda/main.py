@@ -75,6 +75,8 @@ def handler(event, context):
 - 質問形式は「一択選択式」「記述式」をバランス良く含めること。
 - {num_questions}個の問題を、難易度「{difficulty}」で作成すること。
 - 回答には、なぜそれが正解なのかの短い解説を必ず含めること。
+- 「記述式」問題の場合、採点に使うための最も重要な「キーワード」を3〜5個、`scoring_keywords`のリストとして必ず生成すること。
+- 「記述式」問題の`correct_answer`は、要点を押さえた50字程度の簡潔な文章にすること。
 - 出力は必ず指定されたJSON形式のみとし、前後に余計な文章は含めないこと。
 
 # JSON形式の例
@@ -87,7 +89,8 @@ def handler(event, context):
       "question": "質問文1",
       "options": ["選択肢A", "選択肢B", "選択肢C", "選択肢D"],
       "correct_answer": "正解の選択肢",
-      "explanation": "解説文"
+      "explanation": "解説文",
+      "scoring_keywords": []
     }},
     {{
       "question_id": 2,
@@ -96,7 +99,8 @@ def handler(event, context):
       "question": "質問文2",
       "options": [],
       "correct_answer": "記述式の正解文",
-      "explanation": "解説文"
+      "explanation": "解説文",
+      "scoring_keywords": ["キーワード1", "キーワード2", "キーワード3"]
     }}
   ]
 }}

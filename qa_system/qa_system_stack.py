@@ -52,7 +52,7 @@ class QaSystemStack(Stack):
         )
 
         qa_lambda.add_to_role_policy(
-            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel"], resources=["*"])
+            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel", "bedrock:Converse"], resources=["*"])
         )
         qa_table.grant_read_write_data(qa_lambda)
 
@@ -66,6 +66,7 @@ class QaSystemStack(Stack):
             environment={"TABLE_NAME": qa_table.table_name},
         )
         qa_table.grant_read_data(list_qas_lambda)
+        qa_table.grant_read_data_on_index(list_qas_lambda, "ThemeLectureIndex")
 
         delete_qa_lambda = _lambda.Function(
             self,
@@ -119,6 +120,26 @@ class QaSystemStack(Stack):
             "DELETE",
             apigw.LambdaIntegration(delete_qa_lambda),
             authorization_type=apigw.AuthorizationType.NONE,
+        )
+
+        # 5. 回答を処理するLambdaを定義
+        submit_answer_lambda = _lambda.Function(self, "SubmitAnswerFunction",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            code=_lambda.Code.from_asset("lambda_submit_answer"), # <-- 新しいフォルダ名
+            handler="main.handler",
+            timeout=Duration.seconds(30),
+            environment={"TABLE_NAME": qa_table.table_name}
+        )
+        # テーブルへの読み書き権限を付与
+        qa_table.grant_read_write_data(submit_answer_lambda)
+
+        # 6. 新しいAPIエンドポイントを追加
+        # /qas/{id}/submit
+        submit_resource = qa_item_resource.add_resource("submit")
+        submit_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(submit_answer_lambda),
+            authorization_type=apigw.AuthorizationType.NONE
         )
 
         CfnOutput(self, "ApiUrl", value=api.url)
