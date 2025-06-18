@@ -1,4 +1,4 @@
-# lambda/main.py (ユーザーガイド準拠 最終確定版)
+# lambda/main.py 
 
 import json
 import re
@@ -6,11 +6,16 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 import traceback
+import uuid
 
-# 環境変数からモデルIDを取得。CDK側で "us.amazon.nova-lite-v1:0" が設定される
+# 環境変数からモデルIDを取得
 MODEL_ID = os.environ.get("MODEL_ID", "us.amazon.nova-lite-v1:0") 
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 bedrock_runtime = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
+
+TABLE_NAME = os.environ.get("TABLE_NAME")
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
@@ -21,10 +26,33 @@ def handler(event, context):
         lecture_text = body['lecture_text']
         num_questions = body.get('num_questions', 5)
         difficulty = body.get('difficulty', '中')
+        if json_match:
+            qa_result_json = json.loads(json_match.group(0))
+        else:
+            raise Exception("モデルの応答から有効なJSONを抽出できませんでした。")
+
+        # DynamoDBへの保存処理を追加
+        if table:
+            try:
+                qa_set_id = str(uuid.uuid4())
+                item_to_save = {
+                    'qa_set_id': qa_set_id,
+                    'qa_data': qa_result_json, 
+                    'lecture_text_head': lecture_text[:200], 
+                    'created_at': context.aws_request_id # 作成時刻の代わり
+                }
+                table.put_item(Item=item_to_save)
+                print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
+            except Exception as db_error:
+                # DBエラーはログには出すが、ユーザーへの応答は成功させる
+                print(f"ERROR: Failed to save to DynamoDB. {traceback.format_exc()}")
+
+        print("Successfully generated QA.")
+        return create_success_response(qa_result_json)
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
-    # システムプロンプト：モデルの役割を定義
+    # システムプロンプト
     system_prompt = f"""
 あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
 以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
@@ -50,10 +78,10 @@ def handler(event, context):
   ]
 }}
 """
-    # ユーザープロンプト：モデルに具体的な指示を与える
+    # モデルに具体的な指示を与える
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
     
-    # ★★★ ユーザーガイドに基づく、Novaモデルが期待する正しいリクエストボディ ★★★
+    # ★★★ リクエストボディ ★★★
     request_body = {
         "schemaVersion": "messages-v1",
         "system": [{"text": system_prompt}],

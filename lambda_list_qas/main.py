@@ -1,0 +1,46 @@
+import json
+import os
+import boto3
+from decimal import Decimal
+import traceback
+
+# 環境変数からテーブル名を取得
+TABLE_NAME = os.environ.get("TABLE_NAME")
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(TABLE_NAME)
+
+# JSONシリアライズできないDecimal型を変換するヘルパー
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
+def handler(event, context):
+    print(f"Received event: {json.dumps(event)}")
+    try:
+        # DynamoDBから全件スキャン
+        response = table.scan()
+        items = response.get('Items', [])
+        
+        print(f"Found {len(items)} items.")
+        return create_success_response(items)
+
+    except Exception as e:
+        print(f"ERROR: An unexpected error occurred. {traceback.format_exc()}")
+        return create_error_response(500, f"QA一覧の取得中に予期せぬエラーが発生しました: {str(e)}")
+
+def create_success_response(body):
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        # Decimal型を扱えるようにclsを指定
+        'body': json.dumps(body, ensure_ascii=False, cls=DecimalEncoder)
+    }
+
+def create_error_response(status_code, error_message):
+    return {
+        'statusCode': status_code,
+        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+        'body': json.dumps({"error": error_message}, ensure_ascii=False)
+    }
