@@ -61,19 +61,23 @@ def handler(event, context):
 
         json_string = qa_result_text[start_index:end_index+1]
         
-        # ★★★ ここが最終修正点です ★★★
+        # ★★★ ここが最終仕上げの修正点です ★★★
         try:
-            # モデルが複数のJSONオブジェクトを返すクセを吸収するため、全体を[]で囲んで配列にする
-            array_json_string = f"[{json_string}]"
-            parsed_list = json.loads(array_json_string)
-
-            # アプリケーションが期待する{"qa_set": [...]}の形式に整える
-            qa_result_json = {"qa_set": parsed_list}
-
-        except json.JSONDecodeError as json_error:
-            print(f"ERROR: Failed to decode JSON array. Error: {json_error}")
-            print(f"String that failed to parse as array:\n---\n{array_json_string}\n---")
-            raise Exception(f"モデルの応答をJSON配列として解析できませんでした: {json_error}")
+            # まずはそのままパースを試みる
+            qa_result_json = json.loads(json_string)
+        except json.JSONDecodeError as e:
+            # "Extra data"エラーの場合のみ、[]で囲む修正を試みる
+            if "Extra data" in str(e):
+                print("JSONDecodeError with 'Extra data' detected. Attempting to fix by wrapping in an array.")
+                try:
+                    array_json_string = f"[{json_string}]"
+                    parsed_list = json.loads(array_json_string)
+                    qa_result_json = {"qa_set": parsed_list}
+                except Exception as inner_e:
+                    raise Exception(f"Failed to parse model output even after wrapping in array. Error: {inner_e}")
+            else:
+                # その他のJSONエラーはそのまま例外を送出
+                raise e
 
         # (DynamoDBへの保存処理、成功レスポンスの返却は変更なし)
         if table:
