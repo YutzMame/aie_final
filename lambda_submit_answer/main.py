@@ -10,6 +10,12 @@ dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 
 
+def default_json_serializer(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 def convert_floats_to_decimal(obj):
     if isinstance(obj, list):
         return [convert_floats_to_decimal(i) for i in obj]
@@ -104,7 +110,7 @@ def create_success_response(body):
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
         },
-        "body": json.dumps(body),
+        "body": json.dumps(body, default=default_json_serializer),
     }
 
 
