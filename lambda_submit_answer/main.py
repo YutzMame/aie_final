@@ -3,7 +3,6 @@ import os
 import boto3
 import traceback
 import uuid
-from decimal import Decimal
 
 TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource("dynamodb")

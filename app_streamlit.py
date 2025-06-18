@@ -71,7 +71,7 @@ with st.sidebar:
 # ============================
 # 1. QA生成ページ
 # ============================
-if page == "QA生成":
+if st.session_state.page == "QA生成":
     st.header("1. QAを生成する")
     st.markdown('<div class="main-container">', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
@@ -159,7 +159,7 @@ if page == "QA生成":
 # ============================
 # 2. QA管理ページ
 # ============================
-elif page == "QA管理":
+elif st.session_state.page == "QA管理":
     st.header("2. 保存済みQAを管理する")
     st.markdown("##### 絞り込み検索")
 
