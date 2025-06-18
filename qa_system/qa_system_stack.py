@@ -52,7 +52,9 @@ class QaSystemStack(Stack):
         )
 
         qa_lambda.add_to_role_policy(
-            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel", "bedrock:Converse"], resources=["*"])
+            aws_iam.PolicyStatement(
+                actions=["bedrock:InvokeModel", "bedrock:Converse"], resources=["*"]
+            )
         )
         qa_table.grant_read_write_data(qa_lambda)
 
@@ -123,12 +125,16 @@ class QaSystemStack(Stack):
         )
 
         # 5. 回答を処理するLambdaを定義
-        submit_answer_lambda = _lambda.Function(self, "SubmitAnswerFunction",
+        submit_answer_lambda = _lambda.Function(
+            self,
+            "SubmitAnswerFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
-            code=_lambda.Code.from_asset("lambda_submit_answer"), # <-- 新しいフォルダ名
+            code=_lambda.Code.from_asset(
+                "lambda_submit_answer"
+            ),  # <-- 新しいフォルダ名
             handler="main.handler",
             timeout=Duration.seconds(30),
-            environment={"TABLE_NAME": qa_table.table_name}
+            environment={"TABLE_NAME": qa_table.table_name},
         )
         # テーブルへの読み書き権限を付与
         qa_table.grant_read_write_data(submit_answer_lambda)
@@ -139,7 +145,7 @@ class QaSystemStack(Stack):
         submit_resource.add_method(
             "POST",
             apigw.LambdaIntegration(submit_answer_lambda),
-            authorization_type=apigw.AuthorizationType.NONE
+            authorization_type=apigw.AuthorizationType.NONE,
         )
 
         CfnOutput(self, "ApiUrl", value=api.url)
