@@ -6,20 +6,17 @@ from botocore.exceptions import ClientError
 import traceback
 import uuid
 
-# 環境変数からモデルIDを取得
-MODEL_ID = os.environ.get("MODEL_ID", "amazon.titan-text-express-v1") 
+# (環境変数、boto3クライアント、DynamoDBのセットアップは変更なし)
+MODEL_ID = os.environ.get("MODEL_ID", "amazon.titan-text-express-v1")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 bedrock_runtime = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
-
-# DynamoDBのセットアップ
 TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME) if TABLE_NAME else None
 
 def handler(event, context):
     print(f"Received event: {json.dumps(event)}")
-    print(f"Using model: {MODEL_ID} in region: {AWS_REGION}")
-
+    # (リクエストボディの解析、プロンプトの作成、Bedrockリクエストボディの作成は変更なし)
     try:
         body = json.loads(event['body'])
         lecture_text = body['lecture_text']
@@ -28,7 +25,6 @@ def handler(event, context):
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
-    # システムプロンプト (変更なし)
     system_prompt = f"""
 あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
 以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
@@ -41,8 +37,6 @@ def handler(event, context):
 ... (中略) ...
 """
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
-    
-    # Novaモデル用のリクエストボディ (変更なし)
     request_body = {
         "schemaVersion": "messages-v1",
         "system": [{"text": system_prompt}],
@@ -51,34 +45,40 @@ def handler(event, context):
     }
 
     try:
+        # (Bedrock呼び出し、レスポンスボディの読み取りは変更なし)
         print(f"Calling Bedrock with payload: {json.dumps(request_body)}")
         response = bedrock_runtime.invoke_model(body=json.dumps(request_body), modelId=MODEL_ID)
-        
         response_body = json.loads(response.get('body').read())
         qa_result_text = response_body.get('output', {}).get('message', {}).get('content', [{}])[0].get('text')
         
         if not qa_result_text:
             raise Exception("モデルの応答からテキストを抽出できませんでした。")
 
-        # ★★★ ここが修正点です ★★★
-        # モデルの応答からJSON部分だけを安全に抽出
-        json_match = re.search(r'\{.*\}', qa_result_text, re.DOTALL)
-        
-        if json_match:
-            qa_result_json = json.loads(json_match.group(0))
-        else:
-            raise Exception("モデルの応答から有効なJSONを抽出できませんでした。")
+        # ★★★ ここが修正点です: より堅牢なJSON抽出ロジックに変更 ★★★
+        json_string = ""
+        try:
+            # モデル応答からJSONブロックの開始と終了を探す
+            start_index = qa_result_text.find('{')
+            end_index = qa_result_text.rfind('}')
+            
+            if start_index != -1 and end_index != -1 and end_index > start_index:
+                json_string = qa_result_text[start_index:end_index+1]
+                qa_result_json = json.loads(json_string)
+            else:
+                # JSONが見つからなかった場合
+                raise ValueError("モデルの応答から有効なJSONブロックを見つけられませんでした。")
 
-        # DynamoDBへの保存処理
+        except json.JSONDecodeError as json_error:
+            print(f"ERROR: Failed to decode JSON. Error: {json_error}")
+            print(f"Extracted string that failed to parse:\n---\n{json_string}\n---")
+            raise Exception(f"モデルの応答をJSONとして解析できませんでした: {json_error}")
+        
+        # (DynamoDBへの保存処理、成功レスポンスの返却は変更なし)
         if table:
             try:
+                # ... (DB保存ロジック) ...
                 qa_set_id = str(uuid.uuid4())
-                item_to_save = {
-                    'qa_set_id': qa_set_id,
-                    'qa_data': qa_result_json, 
-                    'lecture_text_head': lecture_text[:200],
-                    'created_at': context.aws_request_id
-                }
+                item_to_save = { 'qa_set_id': qa_set_id, 'qa_data': qa_result_json, 'lecture_text_head': lecture_text[:200], 'created_at': context.aws_request_id }
                 table.put_item(Item=item_to_save)
                 print(f"Successfully saved QA set to DynamoDB with id: {qa_set_id}")
             except Exception as db_error:
@@ -88,6 +88,8 @@ def handler(event, context):
         return create_success_response(qa_result_json)
 
     except ClientError as e:
+        # (エラーハンドリングは変更なし)
+        # ...
         error_code = e.response['Error']['Code']
         error_message_detail = e.response['Error']['Message']
         print(f"ERROR: Bedrock ClientError ({error_code}): {error_message_detail}")
@@ -102,15 +104,11 @@ def handler(event, context):
 
 
 def create_success_response(body):
-    return {
-        'statusCode': 200,
-        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-        'body': json.dumps(body, ensure_ascii=False)
-    }
+    # (ヘルパー関数は変更なし)
+    # ...
+    return { 'statusCode': 200, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps(body, ensure_ascii=False) }
 
 def create_error_response(status_code, error_message):
-    return {
-        'statusCode': status_code,
-        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-        'body': json.dumps({"error": error_message}, ensure_ascii=False)
-    }
+    # (ヘルパー関数は変更なし)
+    # ...
+    return { 'statusCode': status_code, 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}, 'body': json.dumps({"error": error_message}, ensure_ascii=False) }
