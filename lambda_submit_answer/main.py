@@ -1,3 +1,4 @@
+from decimal import Decimal
 import json
 import os
 import boto3
@@ -7,6 +8,17 @@ import uuid
 TABLE_NAME = os.environ.get("TABLE_NAME")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
+
+
+def convert_floats_to_decimal(obj):
+    if isinstance(obj, list):
+        return [convert_floats_to_decimal(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_floats_to_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, float):
+        return Decimal(str(obj))  # strを経由して精度を守る
+    else:
+        return obj
 
 
 def handler(event, context):
@@ -69,10 +81,11 @@ def handler(event, context):
         }
 
         # DBに採点結果を追記
+        score_data_decimal = convert_floats_to_decimal(score_data)
         table.update_item(
             Key={"qa_set_id": qa_set_id},
             UpdateExpression="SET submissions = list_append(if_not_exists(submissions, :empty_list), :s)",
-            ExpressionAttributeValues={":s": [score_data], ":empty_list": []},
+            ExpressionAttributeValues={":s": [score_data_decimal], ":empty_list": []},
         )
 
         return create_success_response(score_data)
