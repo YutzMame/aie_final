@@ -1,4 +1,5 @@
 # qa_system/qa_system_stack.py
+from datetime import datetime
 from aws_cdk import (
     Stack, aws_lambda as _lambda, aws_apigateway as apigw,
     Duration, CfnOutput, aws_iam
@@ -13,9 +14,10 @@ class QaSystemStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_11,
             code=_lambda.Code.from_asset("lambda"),
             handler="main.handler",
-            timeout=Duration.seconds(30)
+            timeout=Duration.minutes(2),
+            description=f"Generates QA - deployed on {datetime.now()}",
             environment={
-                "MODEL_ID": "amazon.nova-lite-v1:0" 
+                "MODEL_ID": "us.amazon.nova-lite-v1:0" 
             }
         )
 

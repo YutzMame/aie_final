@@ -1,13 +1,13 @@
-# lambda/main.py (最終修正版)
+# lambda/main.py (ユーザーガイド準拠 最終確定版)
 
 import json
 import os
 import boto3
 from botocore.exceptions import ClientError
 import traceback
-import re # ★★★ 修正点1: reモジュールをインポート ★★★
 
-MODEL_ID = os.environ.get("MODEL_ID", "amazon.titan-text-lite-v1")
+# 環境変数からモデルIDを取得。CDK側で "us.amazon.nova-lite-v1:0" が設定される
+MODEL_ID = os.environ.get("MODEL_ID", "us.amazon.nova-lite-v1:0") 
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 bedrock_runtime = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
 
@@ -23,7 +23,8 @@ def handler(event, context):
     except Exception as e:
         return create_error_response(400, f"リクエストの解析に失敗しました: {str(e)}")
 
-    prompt = f"""
+    # システムプロンプト：モデルの役割を定義
+    system_prompt = f"""
 あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
 以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
 
@@ -47,17 +48,17 @@ def handler(event, context):
     }}
   ]
 }}
-
----
-講義内容:
-{lecture_text}
 """
+    # ユーザープロンプト：モデルに具体的な指示を与える
+    user_prompt = f"--- 講義内容 ---\n{lecture_text}"
     
-    # ★★★ 修正点2: request_body変数に代入する ★★★
+    # ★★★ ユーザーガイドに基づく、Novaモデルが期待する正しいリクエストボディ ★★★
     request_body = {
-        "inputText": prompt,
-        "textGenerationConfig": {
-            "maxTokenCount": 4096,
+        "schemaVersion": "messages-v1",
+        "system": [{"text": system_prompt}],
+        "messages": [{"role": "user", "content": [{"text": user_prompt}]}],
+        "inferenceConfig": {
+            "maxTokens": 4096,
             "stopSequences": [],
             "temperature": 0.7,
             "topP": 0.9
@@ -70,10 +71,16 @@ def handler(event, context):
             body=json.dumps(request_body), 
             modelId=MODEL_ID
         )
-
+        
         response_body = json.loads(response.get('body').read())
-        qa_result_text = response_body.get('results')[0].get('outputText')
+        # 新しい応答形式に合わせて結果を抽出
+        qa_result_text = response_body.get('output', {}).get('message', {}).get('content', [{}])[0].get('text')
+        
+        if not qa_result_text:
+            raise Exception("モデルの応答からテキストを抽出できませんでした。")
 
+        # モデルの応答からJSON部分だけを安全に抽出
+        # モデルがJSONの前後に説明などをつけてしまう場合があるため
         json_match = re.search(r'\{.*\}', qa_result_text, re.DOTALL)
         if json_match:
             qa_result_json = json.loads(json_match.group(0))
@@ -93,6 +100,7 @@ def handler(event, context):
             error_message = f"Bedrockの呼び出し中にエラーが発生しました: {error_message_detail}"
         return create_error_response(500, error_message)
     except Exception as e:
+        import traceback
         print(f"ERROR: An unexpected error occurred. {traceback.format_exc()}")
         return create_error_response(500, f"予期せぬエラーが発生しました: {str(e)}")
 
