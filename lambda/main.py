@@ -1,6 +1,7 @@
 # lambda/main.py (ユーザーガイド準拠 最終確定版)
 
 import json
+import re
 import os
 import boto3
 from botocore.exceptions import ClientError
