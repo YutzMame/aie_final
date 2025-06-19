@@ -5,7 +5,7 @@ import pandas as pd
 
 # --- ページ設定とAPI URL ---
 st.set_page_config(
-    page_title="QA-Master | AI自動問答生成", page_icon="💡", layout="wide"
+    page_title="QA作成ツール | AI自動問答生成", page_icon="💡", layout="wide"
 )
 
 API_URL = "https://vedtxkcx72.execute-api.us-east-1.amazonaws.com/prod/"
@@ -37,7 +37,7 @@ if "quiz_results" not in st.session_state:
 
 # --- サイドバー ---
 with st.sidebar:
-    st.title("QA-Master 💡")
+    st.title("QA作成ツール")
     st.markdown("---")
 
     # クイズが選択されている時だけ「クイズ受験」をメニューに追加
@@ -76,7 +76,7 @@ if st.session_state.page == "QA生成":
     st.markdown('<div class="main-container">', unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        theme_input = st.text_input("テーマ名", placeholder="例：循環器内科")
+        theme_input = st.text_input("テーマ名", placeholder="例：教師あり学習")
     with col2:
         # st.number_inputで数値のみ入力できるようにする
         lecture_number_input = st.number_input(
