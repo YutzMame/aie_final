@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
+import base64
 
 # --- ページ設定とAPI URL ---
 st.set_page_config(
@@ -21,6 +22,7 @@ st.markdown(
     .stButton > button:hover { opacity: 0.9; box-shadow: 0 0 15px #00c6ff; }
     [data-testid="stExpander"] { background: rgba(255, 255, 255, 0.08); border-radius: 0.5rem; border: 1px solid rgba(255, 255, 255, 0.1); }
     h1, h2, h3 { color: #87CEFA; }
+    .stFileUploader { margin-top: 1rem; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -34,28 +36,27 @@ if "selected_qa_set" not in st.session_state:
     st.session_state.selected_qa_set = None
 if "quiz_results" not in st.session_state:
     st.session_state.quiz_results = None
+if "generated_qa" not in st.session_state:
+    st.session_state.generated_qa = None
 
 # --- サイドバー ---
 with st.sidebar:
     st.title("QA作成ツール")
     st.markdown("---")
 
-    # クイズが選択されている時だけ「クイズ受験」をメニューに追加
     page_options = ["QA生成", "QA管理"]
     if st.session_state.selected_qa_set is not None:
         page_options.append("クイズ受験")
 
-    # st.session_state.pageを直接更新
     st.session_state.page = st.radio(
         "メニュー",
         page_options,
-        index=page_options.index(st.session_state.page),  # 現在のページを選択状態に保つ
+        index=page_options.index(st.session_state.page),
         label_visibility="hidden",
     )
 
     st.markdown("---")
 
-    # QA生成ページ用の設定
     if st.session_state.page == "QA生成":
         st.markdown("## ⚙️ 生成設定")
         st.session_state.num_q = st.slider("生成する問題数", 1, 10, 5)
@@ -74,80 +75,139 @@ with st.sidebar:
 if st.session_state.page == "QA生成":
     st.header("1. QAを生成する")
     st.markdown('<div class="main-container">', unsafe_allow_html=True)
+
+    # --- 共通の入力項目 ---
     col1, col2 = st.columns(2)
     with col1:
         theme_input = st.text_input("テーマ名", placeholder="例：教師あり学習")
     with col2:
-        # st.number_inputで数値のみ入力できるようにする
         lecture_number_input = st.number_input(
-            "講義回数（任意）",
-            min_value=1,
-            step=1,
-            placeholder="例: 3 (「第3回」の場合)",
+            "講義回数（必須）", min_value=1, step=1, placeholder="例: 3"
         )
 
-    lecture_input = st.text_area(
-        "**講義内容のテキストをここに貼り付け**",
-        height=250,
-        placeholder="講義の文字起こしやノートをここに貼り付けます...",
-        label_visibility="visible",
-    )
-    if st.button("この内容でQAを生成する", type="primary", use_container_width=True):
-        if not lecture_input:
-            st.warning("講義内容を入力してください。")
-        elif not theme_input:
-            st.warning("テーマ名を入力してください")
-        else:
-            with st.spinner("AIが問題を生成中です..."):
-                payload = {
-                    "lecture_text": lecture_input,
-                    "num_questions": st.session_state.num_q,
-                    "difficulty": st.session_state.difficulty_code,
-                    "theme": theme_input,
-                    "lecture_number": lecture_number_input,
-                }
-                try:
-                    response = requests.post(
-                        f"{API_URL}generate", json=payload, timeout=180
-                    )
-                    response.raise_for_status()
-                    st.session_state.generated_qa = response.json().get("qa_set", [])
-                    st.success("QAが生成されました！")
-                    st.balloons()
+    st.markdown("---")
 
-                    # QA管理ページのキャッシュを削除して、次回の表示で最新化する
-                    if "qa_list" in st.session_state:
-                        del st.session_state.qa_list
+    # --- 入力方法の選択肢 ---
+    input_method_col1, input_method_col2 = st.columns(2)
 
-                except requests.exceptions.RequestException as e:
-                    st.error(f"APIへの接続中にエラーが発生しました: {e}")
-                except json.JSONDecodeError:
-                    st.error(
-                        f"APIからの応答が不正な形式です。APIのログを確認してください。 応答: {response.text}"
-                    )
+    # --- テキストから生成 ---
+    with input_method_col1:
+        st.subheader("方法A: テキストから生成")
+        lecture_input = st.text_area(
+            "講義内容のテキスト", height=250, label_visibility="collapsed"
+        )
+        if st.button("テキストからQAを生成", type="primary", use_container_width=True):
+            if not lecture_input:
+                st.warning("講義内容を入力してください。")
+            elif not theme_input or not lecture_number_input:
+                st.warning("テーマ名と講義回数を入力してください。")
+            else:
+                with st.spinner("AIが問題を生成中です..."):
+                    payload = {
+                        "lecture_text": lecture_input,
+                        "num_questions": st.session_state.num_q,
+                        "difficulty": st.session_state.difficulty_code,
+                        "theme": theme_input,
+                        "lecture_number": int(lecture_number_input),
+                    }
+                    try:
+                        payload = {
+                            "lecture_text": lecture_input,
+                            "num_questions": st.session_state.num_q,
+                            "difficulty": st.session_state.difficulty_code,
+                            "theme": theme_input,
+                            "lecture_number": int(lecture_number_input),
+                        }
+
+                        # ★★★ エンドポイント名を修正 ★★★
+                        response = requests.post(
+                            f"{API_URL.rstrip('/')}/generate-from-text",
+                            json=payload,
+                            timeout=180,
+                        )
+                        response.raise_for_status()
+                        st.session_state.generated_qa = response.json().get(
+                            "qa_set", []
+                        )
+                        st.success("QAが生成されました！")
+                        st.balloons()
+                        if "qa_list" in st.session_state:
+                            del st.session_state.qa_list
+                    except Exception as e:
+                        st.error(f"APIエラー: {e}")
+
+    # --- PPTXファイルから生成  ---
+    with input_method_col2:
+        st.subheader("方法B: PPTXファイルから生成")
+        uploaded_file = st.file_uploader(
+            "PPTXファイルをアップロード", type=["pptx"], label_visibility="collapsed"
+        )
+
+        if st.button("PPTXからQAを生成", key="ppt_upload_button"):
+            # --- 入力チェック ---
+            if uploaded_file is None:
+                st.warning("PPTXファイルをアップロードしてください。")
+            elif not theme_input or not lecture_number_input:
+                st.warning("テーマ名と講義回数を入力してください。")
+            else:
+                # --- メイン処理 ---
+                with st.spinner("ファイルをアップロードしています..."):
+                    try:
+                        # 1. 事前署名付きURLを取得
+                        get_url_payload = {"file_name": uploaded_file.name}
+                        get_url_response = requests.post(
+                            f"{API_URL.rstrip('/')}/get-upload-url",
+                            json=get_url_payload,
+                        )
+                        get_url_response.raise_for_status()
+                        upload_data = get_url_response.json()
+                        upload_url = upload_data["upload_url"]
+
+                        # 2. S3に直接ファイルをアップロード
+                        file_bytes = uploaded_file.getvalue()
+                        upload_response = requests.put(upload_url, data=file_bytes)
+                        upload_response.raise_for_status()
+
+                        # 3. 成功メッセージを表示
+                        st.success("ファイルのアップロードが完了しました。")
+                        st.info(
+                            "バックグラウンドでQA生成が開始されます。しばらくしてから「QA管理」ページで結果を確認してください。"
+                        )
+                        st.balloons()
+
+                    except Exception as e:
+                        import traceback
+
+                        st.error("処理中に予期せぬエラーが発生しました。")
+                        st.code(
+                            f"""
+                        エラータイプ: {type(e).__name__}
+                        エラーメッセージ: {e}
+                        --- トレースバック ---
+                        {traceback.format_exc()}
+                        """
+                        )
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if "generated_qa" in st.session_state and st.session_state.generated_qa:
+    # --- 生成結果の表示 ---
+    if st.session_state.generated_qa:
         st.markdown("---")
-        st.header("生成結果（ここで回答も試せます）")
+        st.header("生成結果")
         for qa in st.session_state.generated_qa:
             q_id = qa.get("question_id", qa.get("question", "")[:10])
-
             st.subheader(
                 f"問{qa.get('question_id', '')} ({qa.get('difficulty', '')}) - {qa.get('type', qa.get('answer_type', 'N/A'))}"
             )
             st.write(qa.get("question", ""))
-
             if qa.get("type", qa.get("answer_type")) == "一択選択式":
-                options = qa.get("options", [])
                 st.radio(
                     "選択肢",
-                    options,
+                    qa.get("options", []),
                     key=f"q_{q_id}",
                     label_visibility="collapsed",
                     index=None,
                 )
-
             with st.expander("答えと解説を見る"):
                 st.markdown(
                     f"**正解:** {qa.get('answer', qa.get('correct_answer', 'N/A'))}"
@@ -163,7 +223,6 @@ elif st.session_state.page == "QA管理":
     st.header("2. 保存済みQAを管理する")
     st.markdown("##### 絞り込み検索")
 
-    # 検索用の入力ウィジェットを横に並べる
     col1, col2 = st.columns([3, 2])
     with col1:
         filter_theme = st.text_input("テーマ名で検索", placeholder="例：循環器内科")
@@ -176,63 +235,45 @@ elif st.session_state.page == "QA管理":
             placeholder="未入力の場合は全回数を表示",
         )
 
-    # 検索ボタンとクリアボタン
     col_search, col_clear, _ = st.columns([1, 1, 4])
     with col_search:
-        # 検索ボタンは API 呼び出しのトリガーにはせず、UI上の目印として配置
         st.button("検索", use_container_width=True, type="primary")
     with col_clear:
         if st.button("クリア", use_container_width=True):
-            # 検索条件をクリアしてページを再実行
-            st.session_state.filter_theme_input = ""
-            st.session_state.filter_lecture_num_input = 1  # number_inputの初期化
             st.rerun()
+
     st.markdown("---")
 
-    # if st.button("一覧を再読み込み", use_container_width=True):
-    #     if "qa_list" in st.session_state:
-    #         del st.session_state.qa_list
-    #     st.rerun()
-
     try:
-        # 1. 検索パラメータを準備する
         params = {}
-        if filter_theme:  # テーマ入力欄に何か入力されていれば
+        if filter_theme:
             params["theme"] = filter_theme
-        if filter_lecture_num:  # 講義回数入力欄に何か入力されていれば
+        if filter_lecture_num:
             params["lecture_number"] = filter_lecture_num
 
-        # 2. 準備したパラメータを使ってAPIを呼び出す
         with st.spinner("QAを読み込んでいます..."):
-            response = requests.get(f"{API_URL}qas", params=params, timeout=60)
+            response = requests.get(
+                f"{API_URL.rstrip('/')}/qas", params=params, timeout=60
+            )
             response.raise_for_status()
             qas = response.json()
 
-        # 3. 取得した結果を表示する (この部分は変更なし)
         if not qas:
             st.info("該当するQAセットはありません。")
         else:
             st.info(f"{len(qas)}件のQAセットが見つかりました。")
             st.markdown("---")
-
             for item in qas:
                 qa_set_id = item["qa_set_id"]
-                # テーマと回数を表示に追加
                 display_title = f"テーマ: {item.get('theme', 'N/A')} | 第{item.get('lecture_number', '?')}回 | ID: `{qa_set_id}`"
-
                 with st.expander(display_title):
                     qa_data = item.get("qa_data", {}).get("qa_set", [])
                     if qa_data:
-                        df = pd.DataFrame(qa_data)
-                        st.dataframe(df)
+                        st.dataframe(pd.DataFrame(qa_data))
                     else:
                         st.write("このセットにはQAデータがありません。")
 
-                    # --- ▼▼▼ ここが変更点です ▼▼▼ ---
-                    # ボタンを横に並べるために、列(columns)を作成します
-                    col1, col2 = st.columns([4, 1])  # 4:1の比率で列を分割
-
-                    # 1列目に「回答する」ボタンを配置
+                    col1, col2 = st.columns([4, 1])
                     with col1:
                         if st.button(
                             "このクイズに回答する",
@@ -241,11 +282,9 @@ elif st.session_state.page == "QA管理":
                             use_container_width=True,
                         ):
                             st.session_state.selected_qa_set = item
-                            st.session_state.quiz_results = None  # 前回の結果をリセット
+                            st.session_state.quiz_results = None
                             st.session_state.page = "クイズ受験"
                             st.rerun()
-
-                    # 2列目に「削除」ボタンを配置
                     with col2:
                         if st.button(
                             "削除",
@@ -253,24 +292,22 @@ elif st.session_state.page == "QA管理":
                             type="secondary",
                             use_container_width=True,
                         ):
-                            delete_url = f"{API_URL}qas/{qa_set_id}"
+                            delete_url = f"{API_URL.rstrip('/')}/qas/{qa_set_id}"
                             delete_response = requests.delete(delete_url)
                             if delete_response.status_code == 204:
                                 st.success(f"ID: {qa_set_id} を削除しました。")
-                                # ページをリフレッシュしてリストを更新
                                 st.rerun()
                             else:
                                 st.error(
                                     f"削除に失敗しました。ステータスコード: {delete_response.status_code}"
                                 )
-
     except Exception as e:
         st.error(f"QA一覧の取得中にエラーが発生しました: {e}")
+
 # ============================
 # 3. クイズ受験ページ
 # ============================
 elif st.session_state.page == "クイズ受験":
-    # クイズが選択されていなければ、管理ページに戻るよう促す
     if st.session_state.selected_qa_set is None:
         st.warning("「QA管理」ページから回答したいクイズを選択してください。")
         st.stop()
@@ -283,10 +320,8 @@ elif st.session_state.page == "クイズ受験":
 
     qa_set = selected_set.get("qa_data", {}).get("qa_set", [])
 
-    # 回答フォーム
     with st.form("quiz_form"):
         user_answers_payload = []
-        # st.session_stateにユーザーの回答を保存するための準備
         if "user_answers_display" not in st.session_state:
             st.session_state.user_answers_display = {}
 
@@ -310,7 +345,7 @@ elif st.session_state.page == "クイズ受験":
             user_answers_payload.append(
                 {"question_id": q_id, "answer": answer, "is_flagged": is_flagged}
             )
-            st.session_state.user_answers_display[q_id] = answer  # 表示用に回答を保存
+            st.session_state.user_answers_display[q_id] = answer
             st.markdown("---")
 
         submitted = st.form_submit_button(
@@ -319,11 +354,10 @@ elif st.session_state.page == "クイズ受験":
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # フォームが提出されたら採点APIを呼び出す
     if submitted:
         with st.spinner("採点中です..."):
             qa_set_id = selected_set["qa_set_id"]
-            api_url = f"{API_URL}qas/{qa_set_id}/submit"
+            api_url = f"{API_URL.rstrip('/')}/qas/{qa_set_id}/submit"
             try:
                 response = requests.post(
                     api_url, json={"answers": user_answers_payload}, timeout=60
@@ -334,7 +368,6 @@ elif st.session_state.page == "クイズ受験":
             except Exception as e:
                 st.error(f"採点中にエラーが発生しました: {e}")
 
-    # 採点結果があれば表示する
     if st.session_state.quiz_results:
         st.markdown("---")
         st.header("✨ 採点結果")
@@ -356,9 +389,9 @@ elif st.session_state.page == "クイズ受験":
         st.markdown("### 各問題の結果")
         for i, qa in enumerate(qa_set):
             q_id = qa.get("question_id", i)
-            result_detail = results["results"][i]
-            status_icon = "✅" if result_detail["is_correct"] else "❌"
-            if result_detail["is_flagged"]:
+            result_detail = results.get("results", [])[i]
+            status_icon = "✅" if result_detail.get("is_correct") else "❌"
+            if result_detail.get("is_flagged"):
                 status_icon = "🏳️"
 
             with st.expander(f"{status_icon} 問{q_id}: {qa.get('question')}"):
