@@ -6,6 +6,8 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_s3_notifications as s3n,
     aws_lambda_event_sources as lambda_event_sources,
+    aws_sns as sns,
+    aws_sns_subscriptions as subscriptions,
     Duration,
     CfnOutput,
     aws_iam,
@@ -21,17 +23,16 @@ class QaSystemStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # ----------------------------------------------------------------
-        # S3 Bucket for PPTX Uploads
+        # S3 Bucket for PDF Uploads
         # ----------------------------------------------------------------
         upload_bucket = s3.Bucket(
             self,
-            "PptxUploadBucket",
+            "PdfUploadBucket",
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             cors=[
                 s3.CorsRule(
                     allowed_methods=[
-                        s3.HttpMethods.PUT,
                         s3.HttpMethods.POST,
                         s3.HttpMethods.GET,
                         s3.HttpMethods.HEAD,
@@ -42,7 +43,6 @@ class QaSystemStack(Stack):
                 )
             ],
         )
-
         # ----------------------------------------------------------------
         # DynamoDB Table
         # ----------------------------------------------------------------
@@ -68,87 +68,105 @@ class QaSystemStack(Stack):
         )
 
         # ----------------------------------------------------------------
-        # Lambda Layer for python-pptx
-        # ----------------------------------------------------------------
-
-        pptx_layer_arn = (
-            "arn:aws:lambda:us-east-1:922058108332:layer:python-pptx-layer2:1"
-        )
-        pptx_layer = _lambda.LayerVersion.from_layer_version_arn(
-            self, "PptxLayer", layer_version_arn=pptx_layer_arn
-        )
-
-        # ----------------------------------------------------------------
         # Lambda Functions
         # ----------------------------------------------------------------
 
         # 1. テキストからのQA生成Lambda
-        qa_lambda = _lambda.Function(
+        # --- SNS Topic for Textract Notifications ---
+        textract_sns_topic = sns.Topic(self, "TextractCompletionTopic")
+
+        # --- IAM Role for Textract to publish to SNS ---
+        textract_role = aws_iam.Role(
             self,
-            "QaGeneratorFunction",
+            "TextractSnsRole",
+            assumed_by=aws_iam.ServicePrincipal("textract.amazonaws.com"),
+        )
+        textract_sns_topic.grant_publish(textract_role)
+
+        # --- New Lambda Functions for PDF Processing ---
+
+        # 1. Start PDF Processing Lambda (S3 Trigger)
+        start_pdf_lambda = _lambda.Function(
+            self,
+            "StartPdfProcessingFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
             architecture=_lambda.Architecture.ARM_64,
-            code=_lambda.Code.from_asset("lambda"),
+            code=_lambda.Code.from_asset("lambda_start_pdf_processing"),
             handler="main.handler",
-            description=f"Generates QA from text - {datetime.now()}",
-            timeout=Duration.minutes(3),
+            timeout=Duration.seconds(60),
             environment={
-                "MODEL_ID": "us.amazon.nova-lite-v1:0",
-                "TABLE_NAME": qa_table.table_name,
+                "SNS_TOPIC_ARN": textract_sns_topic.topic_arn,
+                "TEXTRACT_ROLE_ARN": textract_role.role_arn,
             },
         )
-        qa_table.grant_read_write_data(qa_lambda)
-        qa_lambda.add_to_role_policy(
-            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel"], resources=["*"])
-        )
-
-        # 2. PPTX処理用Lambda
-        ppt_processor_lambda = _lambda.Function(
-            self,
-            "PptProcessorFunction",
-            runtime=_lambda.Runtime.PYTHON_3_11,
-            code=_lambda.Code.from_asset("lambda_ppt_processor"),
-            handler="main.handler",
-            timeout=Duration.minutes(5),
-            memory_size=512,
-            layers=[pptx_layer],
-            description=f"Processes PPTX from S3 - deployed on {datetime.now()}",
-            environment={
-                "MODEL_ID": "us.amazon.nova-lite-v1:0",
-                "TABLE_NAME": qa_table.table_name,
-            },
-        )
-        # S3バケットからの読み取り権限と、DynamoDBへの書き込み権限を付与
-        upload_bucket.grant_read(ppt_processor_lambda)
-        qa_table.grant_read_write_data(ppt_processor_lambda)
-        ppt_processor_lambda.add_to_role_policy(
-            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel"], resources=["*"])
-        )
-        ppt_processor_lambda.add_event_source(
+        start_pdf_lambda.add_event_source(
             lambda_event_sources.S3EventSource(
                 upload_bucket,
                 events=[s3.EventType.OBJECT_CREATED],
-                filters=[s3.NotificationKeyFilter(prefix="uploads/", suffix=".pptx")],
+                filters=[s3.NotificationKeyFilter(prefix="uploads/", suffix=".pdf")],
             )
         )
+        start_pdf_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=["textract:StartDocumentTextDetection"],
+                resources=["*"],
+            )
+        )
+        start_pdf_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=["iam:PassRole"],
+                resources=[textract_role.role_arn],
+            )
+        )
+
+        # 2. Handle Textract Result Lambda (SNS Trigger)
+        handle_textract_lambda = _lambda.Function(
+            self,
+            "HandleTextractResultFunction",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            architecture=_lambda.Architecture.ARM_64,
+            code=_lambda.Code.from_asset("lambda_handle_textract_result"),
+            handler="main.handler",
+            timeout=Duration.minutes(5),
+            memory_size=512,
+            environment={
+                "MODEL_ID": "us.amazon.nova-lite-v1:0",
+                "TABLE_NAME": qa_table.table_name,
+            },
+        )
+        handle_textract_lambda.add_event_source(
+            lambda_event_sources.SnsEventSource(textract_sns_topic)
+        )
+        handle_textract_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(actions=["bedrock:InvokeModel"], resources=["*"])
+        )
+        handle_textract_lambda.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                actions=["textract:GetDocumentTextDetection"], resources=["*"]
+            )
+        )
+        qa_table.grant_read_write_data(handle_textract_lambda)
+        upload_bucket.grant_read(handle_textract_lambda)
 
         # 3. 事前署名付きURL生成Lambda
         get_upload_url_lambda = _lambda.Function(
             self,
             "GetUploadUrlFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
+            architecture=_lambda.Architecture.ARM_64,
             code=_lambda.Code.from_asset("lambda_get_upload_url"),
             handler="main.handler",
             timeout=Duration.seconds(30),
             environment={"UPLOAD_BUCKET_NAME": upload_bucket.bucket_name},
         )
         # S3バケットへの書き込みを許可する権限を付与
-        upload_bucket.grant_put(get_upload_url_lambda)
+        upload_bucket.grant_write(get_upload_url_lambda)
         # 3. QA一覧取得Lambda
         list_qas_lambda = _lambda.Function(
             self,
             "ListQasFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
+            architecture=_lambda.Architecture.ARM_64,
             code=_lambda.Code.from_asset("lambda_list_qas"),
             handler="main.handler",
             timeout=Duration.seconds(30),
@@ -161,6 +179,7 @@ class QaSystemStack(Stack):
             self,
             "DeleteQaFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
+            architecture=_lambda.Architecture.ARM_64,
             code=_lambda.Code.from_asset("lambda_delete_qa"),
             handler="main.handler",
             timeout=Duration.seconds(30),
@@ -173,6 +192,7 @@ class QaSystemStack(Stack):
             self,
             "SubmitAnswerFunction",
             runtime=_lambda.Runtime.PYTHON_3_11,
+            architecture=_lambda.Architecture.ARM_64,
             code=_lambda.Code.from_asset("lambda_submit_answer"),
             handler="main.handler",
             timeout=Duration.seconds(30),
@@ -204,10 +224,6 @@ class QaSystemStack(Stack):
 
         # --- エンドポイントの定義 ---
 
-        # テキストから生成
-        generate_resource = api.root.add_resource("generate-from-text")
-        generate_resource.add_method("POST", apigw.LambdaIntegration(qa_lambda))
-
         # PPTXから生成
         get_upload_url_resource = api.root.add_resource("get-upload-url")
         get_upload_url_resource.add_method(
@@ -231,4 +247,4 @@ class QaSystemStack(Stack):
         # Outputs
         # ----------------------------------------------------------------
         CfnOutput(self, "ApiUrl", value=api.url)
-        CfnOutput(self, "UploadBucketName", value=qa_table.table_name)
+        CfnOutput(self, "UploadBucketName", value=upload_bucket.bucket_name)

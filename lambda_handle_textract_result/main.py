@@ -1,12 +1,10 @@
+# lambda_handle_textract_result/main.py の全コード
 import json
 import os
 import boto3
-import io
 import re
 import traceback
 import uuid
-from pptx import Presentation
-import urllib.parse
 from datetime import datetime
 
 # --- AWSクライアントの初期化 ---
@@ -15,24 +13,45 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 TABLE_NAME = os.environ.get("TABLE_NAME")
 
 bedrock_runtime = boto3.client(service_name="bedrock-runtime", region_name=AWS_REGION)
-s3_client = boto3.client("s3")
+textract_client = boto3.client("textract")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 
 
+def get_textract_results(job_id):
+    """Textractジョブの結果をページネーションを考慮して全て取得する"""
+    full_text = ""
+    pages = []
+
+    response = textract_client.get_document_text_detection(JobId=job_id)
+    pages.append(response)
+
+    next_token = response.get("NextToken")
+    while next_token:
+        response = textract_client.get_document_text_detection(
+            JobId=job_id, NextToken=next_token
+        )
+        pages.append(response)
+        next_token = response.get("NextToken")
+
+    for page in pages:
+        for item in page["Blocks"]:
+            if item["BlockType"] == "LINE":
+                full_text += item["Text"] + "\n"
+
+    return full_text
+
+
 def generate_qa_from_text(lecture_text, num_questions, difficulty):
-    """
-    抽出されたテキストを元に、Bedrockを呼び出してQAを生成する共通関数。
-    """
+    # この関数は generate-from-text のものと全く同じでOK
     print(
         f"Generating {num_questions} QAs with difficulty '{difficulty}' from extracted text."
     )
-
     system_prompt = f"""
 あなたは、講義内容から学習者の理解度を測るための問題を作成する専門家です。
 以下のルールに従って、与えられた講義内容から質の高いQAセットを作成してください。
 # ルール
-- 質問形式は「一択選択式」「記述式」をバランス良く含めること。ただし、「記述式」の問題数は少なくすること。
+- 質問形式は「一択選択式」「記述式」をバランス良く含めること。
 - {num_questions}個の問題を、難易度「{difficulty}」で作成すること。
 - 回答には、なぜそれが正解なのかの短い解説を必ず含めること。
 - 出力は必ず指定されたJSON形式のみとし、前後に余計な文章は含めないこと。
@@ -43,34 +62,24 @@ def generate_qa_from_text(lecture_text, num_questions, difficulty):
       "question_id": 1,
       "difficulty": "易",
       "type": "一択選択式",
-      "question_text": "質問文",
+      "question": "質問文",
       "options": ["選択肢A", "選択肢B", "選択肢C", "選択肢D"],
-      "answer": "正解の選択肢",
+      "correct_answer": "正解の選択肢",
       "explanation": "解説文"
     }}
   ]
 }}
 """
     user_prompt = f"--- 講義内容 ---\n{lecture_text}"
-
-    # Novaモデルが期待する正しいmessages形式のリクエストボディ
     request_body = {
         "schemaVersion": "messages-v1",
         "system": [{"text": system_prompt}],
         "messages": [{"role": "user", "content": [{"text": user_prompt}]}],
-        "inferenceConfig": {
-            "maxTokens": 4096,
-            "stopSequences": [],
-            "temperature": 0.7,
-            "topP": 0.9,
-        },
+        "inferenceConfig": {"maxTokens": 4096, "temperature": 0.7, "topP": 0.9},
     }
-
-    print(f"Calling Bedrock with payload...")
     response = bedrock_runtime.invoke_model(
         body=json.dumps(request_body), modelId=MODEL_ID
     )
-
     response_body = json.loads(response.get("body").read())
     qa_result_text = (
         response_body.get("output", {})
@@ -90,41 +99,35 @@ def generate_qa_from_text(lecture_text, num_questions, difficulty):
 
 
 def handler(event, context):
-    print(f"Received S3 event: {json.dumps(event)}")
+    print(f"Received SNS event: {json.dumps(event)}")
 
-    # S3イベントからバケット名とオブジェクトキーを取得
-    bucket = event["Records"][0]["s3"]["bucket"]["name"]
-    key = urllib.parse.unquote_plus(
-        event["Records"][0]["s3"]["object"]["key"], encoding="utf-8"
-    )
+    # SNSメッセージからTextractのジョブ情報を取得
+    message = json.loads(event["Records"][0]["Sns"]["Message"])
+    job_id = message["JobId"]
+    status = message["Status"]
+    s3_object_info = message["DocumentLocation"]["S3Object"]
+    bucket = s3_object_info["Bucket"]
+    key = s3_object_info["Name"]
+
+    if status != "SUCCEEDED":
+        print(f"Textract job failed for s3://{bucket}/{key} with status: {status}")
+        return
 
     try:
-        # S3オブジェクトのメタデータを取得
-        s3_object = s3_client.head_object(Bucket=bucket, Key=key)
-        metadata = s3_object.get("Metadata", {})
+        # Textractから文字抽出結果を取得
+        extracted_text = get_textract_results(job_id)
+        if not extracted_text.strip():
+            raise ValueError("Textract did not return any text.")
+
+        # S3オブジェクトのメタデータを取得（Streamlitアプリから渡された情報）
+        s3_object_meta = boto3.client("s3").head_object(Bucket=bucket, Key=key)
+        metadata = s3_object_meta.get("Metadata", {})
         theme = metadata.get("theme", "untitled")
         lecture_number = int(metadata.get("lecture_number", 1))
         num_questions = int(metadata.get("num_questions", 5))
         difficulty = metadata.get("difficulty", "中")
 
-        # S3からファイルをダウンロード
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        ppt_content = response["Body"].read()
-
-        # メモリ上でファイルを扱う
-        ppt_stream = io.BytesIO(ppt_content)
-        presentation = Presentation(ppt_stream)
-
-        # 全スライドからテキストを抽出
-        extracted_text = "\n".join(
-            shape.text
-            for slide in presentation.slides
-            for shape in slide.shapes
-            if hasattr(shape, "text")
-        )
-        print(f"Extracted {len(extracted_text)} characters from {key}.")
-
-        # 抽出したテキストを使ってQAを生成
+        # BedrockでQAを生成
         qa_json = generate_qa_from_text(extracted_text, num_questions, difficulty)
 
         # DynamoDBに保存
@@ -139,10 +142,10 @@ def handler(event, context):
         }
         table.put_item(Item=item_to_save)
 
-        print(f"Successfully processed {key} and saved to DynamoDB.")
+        print(f"Successfully processed and saved QA for s3://{bucket}/{key}")
         return {"status": "success"}
 
     except Exception as e:
-        print(f"ERROR processing file {key} from bucket {bucket}.")
+        print(f"Error processing Textract result for s3://{bucket}/{key}")
         print(traceback.format_exc())
         raise e

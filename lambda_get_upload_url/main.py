@@ -1,4 +1,4 @@
-# lambda_get_upload_url/main.py 
+# lambda_get_upload_url/main.py
 
 import json
 import os
@@ -8,6 +8,7 @@ import uuid
 
 s3_client = boto3.client("s3")
 BUCKET_NAME = os.environ.get("UPLOAD_BUCKET_NAME")
+
 
 def handler(event, context):
     try:
@@ -38,7 +39,7 @@ def handler(event, context):
                 {"x-amz-meta-num_questions": str(num_questions)},
                 {"x-amz-meta-difficulty": difficulty},
             ],
-            ExpiresIn=3600  # 1 hour
+            ExpiresIn=3600,  # 1 hour
         )
 
         return {

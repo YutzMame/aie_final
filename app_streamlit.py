@@ -9,25 +9,20 @@ st.set_page_config(
     page_title="QA作成ツール | AI自動問答生成", page_icon="💡", layout="wide"
 )
 
-API_URL = "https://vedtxkcx72.execute-api.us-east-1.amazonaws.com/prod/"
+# CDKデプロイ後に、Outputsから正しいAPI URLを取得して設定してください
+API_URL = "https://vedtxkcx72.execute-api.us-east-1.amazonaws.com/prod/" 
 
 # --- デザイン用カスタムCSS ---
-st.markdown(
-    """
+st.markdown("""
 <style>
     [data-testid="stAppViewContainer"] { background: linear-gradient(180deg, #001f3f, #000020); }
-    [data-testid="stSidebar"] { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); border-right: 1px solid rgba(255, 255, 255, 0.1); }
-    .main-container { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 2rem; border-radius: 1rem; margin-bottom: 1rem; }
-    .stButton > button { background: linear-gradient(90deg, #0072ff, #00c6ff); color: white; border: none; transition: all 0.3s; }
+    [data-testid="stSidebar"] { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); }
+    .main-container { background: rgba(38, 39, 48, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 2rem; border-radius: 1rem; }
+    .stButton > button { background: linear-gradient(90deg, #0072ff, #00c6ff); color: white; border: none; }
     .stButton > button:hover { opacity: 0.9; box-shadow: 0 0 15px #00c6ff; }
-    [data-testid="stExpander"] { background: rgba(255, 255, 255, 0.08); border-radius: 0.5rem; border: 1px solid rgba(255, 255, 255, 0.1); }
     h1, h2, h3 { color: #87CEFA; }
-    .stFileUploader { margin-top: 1rem; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
-
+""", unsafe_allow_html=True)
 
 # --- session_stateの初期化 ---
 if "page" not in st.session_state:
@@ -36,186 +31,87 @@ if "selected_qa_set" not in st.session_state:
     st.session_state.selected_qa_set = None
 if "quiz_results" not in st.session_state:
     st.session_state.quiz_results = None
-if "generated_qa" not in st.session_state:
-    st.session_state.generated_qa = None
 
 # --- サイドバー ---
 with st.sidebar:
     st.title("QA作成ツール")
     st.markdown("---")
-
     page_options = ["QA生成", "QA管理"]
     if st.session_state.selected_qa_set is not None:
         page_options.append("クイズ受験")
-
-    st.session_state.page = st.radio(
-        "メニュー",
-        page_options,
-        index=page_options.index(st.session_state.page),
-        label_visibility="hidden",
-    )
-
+    st.session_state.page = st.radio("メニュー", page_options, index=page_options.index(st.session_state.page), label_visibility="collapsed")
     st.markdown("---")
-
     if st.session_state.page == "QA生成":
         st.markdown("## ⚙️ 生成設定")
         st.session_state.num_q = st.slider("生成する問題数", 1, 10, 5)
         difficulty_map = {"易しい": "易", "普通": "中", "難しい": "難"}
-        selected_difficulty_label = st.radio(
-            "難易度", list(difficulty_map.keys()), index=1
-        )
+        selected_difficulty_label = st.radio("難易度", list(difficulty_map.keys()), index=1)
         st.session_state.difficulty_code = difficulty_map[selected_difficulty_label]
-
-    st.info("AIが講義内容から問題と回答を自動で作成します。")
-
+    st.info("講義資料のPDFから問題と回答を自動で作成します。")
 
 # ============================
 # 1. QA生成ページ
 # ============================
 if st.session_state.page == "QA生成":
-    st.header("1. QAを生成する")
+    st.header("1. PDFからQAを生成する")
     st.markdown('<div class="main-container">', unsafe_allow_html=True)
 
-    # --- 共通の入力項目 ---
     col1, col2 = st.columns(2)
     with col1:
-        theme_input = st.text_input("テーマ名", placeholder="例：教師あり学習")
+        theme_input = st.text_input("テーマ名", placeholder="例：サーバーレスアーキテクチャ")
     with col2:
-        lecture_number_input = st.number_input(
-            "講義回数（必須）", min_value=1, step=1, placeholder="例: 3"
-        )
+        lecture_number_input = st.number_input("講義回数（必須）", min_value=1, step=1, placeholder="例: 5")
 
     st.markdown("---")
+    
+    # PDFアップロード機能に一本化
+    uploaded_file = st.file_uploader(
+        "講義資料のPDFファイルをアップロード",
+        type=["pdf"],
+        label_visibility="visible"
+    )
 
-    # --- 入力方法の選択肢 ---
-    input_method_col1, input_method_col2 = st.columns(2)
-
-    # --- テキストから生成 ---
-    with input_method_col1:
-        st.subheader("方法A: テキストから生成")
-        lecture_input = st.text_area(
-            "講義内容のテキスト", height=250, label_visibility="collapsed"
-        )
-        if st.button("テキストからQAを生成", type="primary", use_container_width=True):
-            if not lecture_input:
-                st.warning("講義内容を入力してください。")
-            elif not theme_input or not lecture_number_input:
-                st.warning("テーマ名と講義回数を入力してください。")
-            else:
-                with st.spinner("AIが問題を生成中です..."):
-                    payload = {
-                        "lecture_text": lecture_input,
-                        "num_questions": st.session_state.num_q,
-                        "difficulty": st.session_state.difficulty_code,
+    if st.button("PDFからQAを生成", use_container_width=True, type="primary"):
+        if uploaded_file is None:
+            st.warning("PDFファイルをアップロードしてください。")
+        elif not theme_input or not lecture_number_input:
+            st.warning("テーマ名と講義回数を入力してください。")
+        else:
+            with st.spinner("ファイルをアップロードしています..."):
+                try:
+                    # 1. メタデータ付きの事前署名付きPOST情報を取得
+                    get_url_payload = {
+                        "file_name": uploaded_file.name,
                         "theme": theme_input,
                         "lecture_number": int(lecture_number_input),
+                        "num_questions": st.session_state.num_q,
+                        "difficulty": st.session_state.difficulty_code,
                     }
-                    try:
-                        payload = {
-                            "lecture_text": lecture_input,
-                            "num_questions": st.session_state.num_q,
-                            "difficulty": st.session_state.difficulty_code,
-                            "theme": theme_input,
-                            "lecture_number": int(lecture_number_input),
-                        }
+                    get_url_response = requests.post(f"{API_URL.rstrip('/')}/get-upload-url", json=get_url_payload)
+                    get_url_response.raise_for_status()
+                    post_info = get_url_response.json()
 
-                        # ★★★ エンドポイント名を修正 ★★★
-                        response = requests.post(
-                            f"{API_URL.rstrip('/')}/generate-from-text",
-                            json=payload,
-                            timeout=180,
-                        )
-                        response.raise_for_status()
-                        st.session_state.generated_qa = response.json().get(
-                            "qa_set", []
-                        )
-                        st.success("QAが生成されました！")
-                        st.balloons()
-                        if "qa_list" in st.session_state:
-                            del st.session_state.qa_list
-                    except Exception as e:
-                        st.error(f"APIエラー: {e}")
+                    # 2. S3にファイルをフォーム形式でPOST
+                    files = {"file": uploaded_file.getvalue()}
+                    upload_response = requests.post(post_info['url'], data=post_info['fields'], files=files)
+                    upload_response.raise_for_status()
 
-    # --- PPTXファイルから生成  ---
-    with input_method_col2:
-        st.subheader("方法B: PPTXファイルから生成")
-        uploaded_file = st.file_uploader(
-            "PPTXファイルをアップロード", type=["pptx"], label_visibility="collapsed"
-        )
+                    # 3. 成功メッセージを表示
+                    st.success("ファイルのアップロードが完了しました。")
+                    st.info("バックグラウンドで文字抽出とQA生成が開始されます。処理には数分かかる場合があります。しばらくしてから「QA管理」ページで結果を確認してください。")
+                    st.balloons()
 
-        if st.button("PPTXからQAを生成", key="ppt_upload_button"):
-            # --- 入力チェック ---
-            if uploaded_file is None:
-                st.warning("PPTXファイルをアップロードしてください。")
-            elif not theme_input or not lecture_number_input:
-                st.warning("テーマ名と講義回数を入力してください。")
-            else:
-                # --- メイン処理 ---
-                with st.spinner("ファイルをアップロードしています..."):
-                    try:
-                        # 1. 事前署名付きURLを取得
-                        get_url_payload = {"file_name": uploaded_file.name}
-                        get_url_response = requests.post(
-                            f"{API_URL.rstrip('/')}/get-upload-url",
-                            json=get_url_payload,
-                        )
-                        get_url_response.raise_for_status()
-                        upload_data = get_url_response.json()
-                        upload_url = upload_data["upload_url"]
-
-                        # 2. S3に直接ファイルをアップロード
-                        file_bytes = uploaded_file.getvalue()
-                        upload_response = requests.put(upload_url, data=file_bytes)
-                        upload_response.raise_for_status()
-
-                        # 3. 成功メッセージを表示
-                        st.success("ファイルのアップロードが完了しました。")
-                        st.info(
-                            "バックグラウンドでQA生成が開始されます。しばらくしてから「QA管理」ページで結果を確認してください。"
-                        )
-                        st.balloons()
-
-                    except Exception as e:
-                        import traceback
-
-                        st.error("処理中に予期せぬエラーが発生しました。")
-                        st.code(
-                            f"""
-                        エラータイプ: {type(e).__name__}
-                        エラーメッセージ: {e}
-                        --- トレースバック ---
-                        {traceback.format_exc()}
-                        """
-                        )
+                except Exception as e:
+                    import traceback
+                    st.error(f"処理中に予期せぬエラーが発生しました: {e}")
+                    st.code(f"""
+                    エラータイプ: {type(e).__name__}
+                    エラーメッセージ: {e}
+                    --- トレースバック ---
+                    {traceback.format_exc()}
+                    """)
 
     st.markdown("</div>", unsafe_allow_html=True)
-
-    # --- 生成結果の表示 ---
-    if st.session_state.generated_qa:
-        st.markdown("---")
-        st.header("生成結果")
-        for qa in st.session_state.generated_qa:
-            q_id = qa.get("question_id", qa.get("question", "")[:10])
-            st.subheader(
-                f"問{qa.get('question_id', '')} ({qa.get('difficulty', '')}) - {qa.get('type', qa.get('answer_type', 'N/A'))}"
-            )
-            st.write(qa.get("question", ""))
-            if qa.get("type", qa.get("answer_type")) == "一択選択式":
-                st.radio(
-                    "選択肢",
-                    qa.get("options", []),
-                    key=f"q_{q_id}",
-                    label_visibility="collapsed",
-                    index=None,
-                )
-            with st.expander("答えと解説を見る"):
-                st.markdown(
-                    f"**正解:** {qa.get('answer', qa.get('correct_answer', 'N/A'))}"
-                )
-                st.markdown(f"**解説:** {qa.get('explanation', 'N/A')}")
-        st.markdown("---")
-
-
 # ============================
 # 2. QA管理ページ
 # ============================
